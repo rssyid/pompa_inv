@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ClipboardCheck, Download, Eye, Printer, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Download, Eye, FileText, Printer, X } from "lucide-react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
 import { PumpPrintReport } from "@/components/PumpPrintReport";
@@ -142,14 +142,25 @@ export default function PumpDetailPage() {
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               <span>Tutup Pratinjau</span>
             </button>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover"
-            >
-              <Printer className="h-4 w-4" aria-hidden="true" />
-              <span>Cetak / Simpan PDF</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`/api/reports/export?type=pump-docx&pumpId=${pump.id}${
+                  activeInspection ? `&inspectionId=${activeInspection.id}` : ""
+                }`}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-field-border bg-field-bg px-3 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
+              >
+                <FileText className="h-4 w-4" aria-hidden="true" />
+                <span>Download Word</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover"
+              >
+                <Printer className="h-4 w-4" aria-hidden="true" />
+                <span>Cetak / Simpan PDF</span>
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto pb-4">
             <PumpPrintReport pump={pump} inspection={activeInspection} forceShow />
@@ -169,11 +180,22 @@ export default function PumpDetailPage() {
 
           <div className="flex flex-wrap items-center gap-2">
             <a
-              href={`/api/reports/export?type=pump&pumpId=${pump.id}`}
+              href={`/api/reports/export?type=pump&pumpId=${pump.id}${
+                activeInspection ? `&inspectionId=${activeInspection.id}` : ""
+              }`}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-field-border bg-field-surface px-3 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
             >
               <Download className="h-4 w-4" aria-hidden="true" />
               <span>Export Excel</span>
+            </a>
+            <a
+              href={`/api/reports/export?type=pump-docx&pumpId=${pump.id}${
+                activeInspection ? `&inspectionId=${activeInspection.id}` : ""
+              }`}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-field-border bg-field-surface px-3 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
+            >
+              <FileText className="h-4 w-4" aria-hidden="true" />
+              <span>Download Word</span>
             </a>
             <button
               type="button"

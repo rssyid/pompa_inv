@@ -390,31 +390,23 @@ export function PumpPrintReport({
       )}
 
       {/* Formal 3-Column Approval Signature Footer */}
-      <footer className="print-avoid-break mt-3 grid grid-cols-3 gap-4 border-t border-[#CBD5CE] pt-2.5 text-center text-[9px] text-[#132019]">
+      <footer className="print-avoid-break mt-4 grid grid-cols-3 gap-6 border-t border-[#CBD5CE] pt-3 text-center text-[9px] text-[#132019]">
         <div>
           <p className="font-semibold text-[#47554D]">Diperiksa Oleh,</p>
-          <div className="mt-9 border-b border-[#132019] pb-0.5 font-semibold">
-            {inspection?.inspectorName ?? "____________________"}
-          </div>
-          <p className="mt-0.5 text-[8px] text-[#47554D]">
-            Petugas / Pemeriksa ({inspection?.inspectedAt ?? "-"})
-          </p>
+          <div className="mt-11 border-b border-[#132019] pb-0.5">&nbsp;</div>
+          <p className="mt-1 text-[8px] text-[#47554D]">&nbsp;</p>
         </div>
 
         <div>
           <p className="font-semibold text-[#47554D]">Diketahui Oleh,</p>
-          <div className="mt-9 border-b border-[#132019] pb-0.5 font-semibold">
-            &nbsp;
-          </div>
-          <p className="mt-0.5 text-[8px] text-[#47554D]">Workshop / Kepala Mekanik</p>
+          <div className="mt-11 border-b border-[#132019] pb-0.5">&nbsp;</div>
+          <p className="mt-1 text-[8px] text-[#47554D]">&nbsp;</p>
         </div>
 
         <div>
           <p className="font-semibold text-[#47554D]">Disetujui Oleh,</p>
-          <div className="mt-9 border-b border-[#132019] pb-0.5 font-semibold">
-            &nbsp;
-          </div>
-          <p className="mt-0.5 text-[8px] text-[#47554D]">Estate Manager / Pimpinan Unit</p>
+          <div className="mt-11 border-b border-[#132019] pb-0.5">&nbsp;</div>
+          <p className="mt-1 text-[8px] text-[#47554D]">&nbsp;</p>
         </div>
       </footer>
     </article>

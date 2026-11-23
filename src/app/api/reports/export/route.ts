@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   blocks,
@@ -7,6 +7,7 @@ import {
   engineBrands,
   estates,
   inspectionItems,
+  inspectionPhotos,
   inspections,
   issuePresets,
   pumps,
@@ -16,56 +17,51 @@ import {
 import { requireApiSession } from "@/lib/auth";
 import { generateRecapWorkbook, generateSinglePumpWorkbook } from "@/lib/excel/exporter";
 import { queryFilteredPumps, queryLatestIssuesForPumps } from "@/lib/queries/pumps";
+import { getStorageProvider } from "@/lib/storage";
+import { generatePumpReportDocx } from "@/lib/word/pump-report-docx";
 
-export async function GET(request: NextRequest) {
-  const auth = await requireApiSession();
-  if ("error" in auth) return auth.error;
+async function loadSinglePumpExportData(pumpId: number, inspectionIdParam?: number) {
+  const db = getDb();
+  const [pump] = await db
+    .select({
+      id: pumps.id,
+      pumpCode: pumps.pumpCode,
+      currentUnitStatus: pumps.currentUnitStatus,
+      blockCode: blocks.code,
+      estateCode: estates.code,
+      regionName: regions.name,
+      companyName: companies.name,
+      pumpTypeName: pumpTypes.name,
+      engineBrandName: engineBrands.name,
+    })
+    .from(pumps)
+    .innerJoin(blocks, eq(pumps.blockId, blocks.id))
+    .innerJoin(estates, eq(blocks.estateId, estates.id))
+    .innerJoin(regions, eq(estates.regionId, regions.id))
+    .innerJoin(companies, eq(regions.companyId, companies.id))
+    .innerJoin(pumpTypes, eq(pumps.pumpTypeId, pumpTypes.id))
+    .innerJoin(engineBrands, eq(pumps.engineBrandId, engineBrands.id))
+    .where(eq(pumps.id, pumpId))
+    .limit(1);
 
-  const sp = request.nextUrl.searchParams;
-  const exportType = sp.get("type") ?? "recap";
+  if (!pump) return null;
 
-  if (exportType === "pump") {
-    const pumpId = Number(sp.get("pumpId"));
-    if (!Number.isInteger(pumpId) || pumpId <= 0) {
-      return NextResponse.json({ error: "ID pompa tidak valid." }, { status: 400 });
-    }
+  const [inspection] = inspectionIdParam
+    ? await db
+        .select()
+        .from(inspections)
+        .where(and(eq(inspections.id, inspectionIdParam), eq(inspections.pumpId, pumpId)))
+        .limit(1)
+    : await db
+        .select()
+        .from(inspections)
+        .where(eq(inspections.pumpId, pumpId))
+        .orderBy(desc(inspections.inspectedAt), desc(inspections.id))
+        .limit(1);
 
-    const db = getDb();
-    const [pump] = await db
-      .select({
-        id: pumps.id,
-        pumpCode: pumps.pumpCode,
-        currentUnitStatus: pumps.currentUnitStatus,
-        blockCode: blocks.code,
-        estateCode: estates.code,
-        regionName: regions.name,
-        companyName: companies.name,
-        pumpTypeName: pumpTypes.name,
-        engineBrandName: engineBrands.name,
-      })
-      .from(pumps)
-      .innerJoin(blocks, eq(pumps.blockId, blocks.id))
-      .innerJoin(estates, eq(blocks.estateId, estates.id))
-      .innerJoin(regions, eq(estates.regionId, regions.id))
-      .innerJoin(companies, eq(regions.companyId, companies.id))
-      .innerJoin(pumpTypes, eq(pumps.pumpTypeId, pumpTypes.id))
-      .innerJoin(engineBrands, eq(pumps.engineBrandId, engineBrands.id))
-      .where(eq(pumps.id, pumpId))
-      .limit(1);
-
-    if (!pump) {
-      return NextResponse.json({ error: "Pompa tidak ditemukan." }, { status: 404 });
-    }
-
-    const [latest] = await db
-      .select()
-      .from(inspections)
-      .where(eq(inspections.pumpId, pumpId))
-      .orderBy(desc(inspections.inspectedAt), desc(inspections.id))
-      .limit(1);
-
-    const items = latest
-      ? await db
+  const [items, photoRows] = inspection
+    ? await Promise.all([
+        db
           .select({
             sectionCode: inspectionItems.sectionCode,
             sectionName: inspectionItems.sectionName,
@@ -79,9 +75,92 @@ export async function GET(request: NextRequest) {
           })
           .from(inspectionItems)
           .leftJoin(issuePresets, eq(inspectionItems.issuePresetId, issuePresets.id))
-          .where(eq(inspectionItems.inspectionId, latest.id))
-          .orderBy(asc(inspectionItems.sortOrder))
-      : [];
+          .where(eq(inspectionItems.inspectionId, inspection.id))
+          .orderBy(asc(inspectionItems.sortOrder)),
+        db
+          .select()
+          .from(inspectionPhotos)
+          .where(eq(inspectionPhotos.inspectionId, inspection.id))
+          .orderBy(asc(inspectionPhotos.id)),
+      ])
+    : [[], []];
+
+  return { pump, inspection: inspection ?? null, items, photoRows };
+}
+
+export async function GET(request: NextRequest) {
+  const auth = await requireApiSession();
+  if ("error" in auth) return auth.error;
+
+  const sp = request.nextUrl.searchParams;
+  const exportType = sp.get("type") ?? "recap";
+
+  if (exportType === "pump" || exportType === "pump-docx") {
+    const pumpId = Number(sp.get("pumpId"));
+    const inspectionId = Number(sp.get("inspectionId")) || undefined;
+    if (!Number.isInteger(pumpId) || pumpId <= 0) {
+      return NextResponse.json({ error: "ID pompa tidak valid." }, { status: 400 });
+    }
+
+    const data = await loadSinglePumpExportData(pumpId, inspectionId);
+    if (!data) {
+      return NextResponse.json({ error: "Pompa tidak ditemukan." }, { status: 404 });
+    }
+
+    const { pump, inspection, items, photoRows } = data;
+    const mappedItems = items.map((item) => ({
+      ...item,
+      issueLabel: item.issueLabel ?? "",
+      notes: item.notes ?? "",
+    }));
+
+    if (exportType === "pump-docx") {
+      const photos = (
+        await Promise.all(
+          photoRows.map(async (p) => {
+            try {
+              const provider = getStorageProvider(
+                p.storageProvider === "local" ? "local" : "gdrive"
+              );
+              const res = await provider.read(p.storageKey, p.mimeType);
+              return {
+                buffer: res.buffer,
+                mimeType: p.mimeType || res.mimeType,
+                caption: p.caption || p.fileName,
+              };
+            } catch {
+              return null;
+            }
+          })
+        )
+      ).filter((p): p is NonNullable<typeof p> => p !== null);
+
+      const docBuffer = await generatePumpReportDocx({
+        companyName: pump.companyName,
+        regionName: pump.regionName,
+        estateCode: pump.estateCode,
+        blockCode: pump.blockCode,
+        pumpCode: pump.pumpCode,
+        pumpTypeName: pump.pumpTypeName,
+        engineBrandName: pump.engineBrandName,
+        unitStatus: inspection?.unitStatus ?? pump.currentUnitStatus,
+        inspectedAt: inspection?.inspectedAt ?? "-",
+        inspectorName: inspection?.inspectorName ?? "-",
+        notes: inspection?.notes ?? "",
+        items: mappedItems,
+        photos,
+      });
+
+      const safeCode = pump.pumpCode.replace(/[^a-zA-Z0-9_-]/g, "_");
+      return new NextResponse(new Uint8Array(docBuffer), {
+        status: 200,
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "Content-Disposition": `attachment; filename="Laporan_${safeCode}.docx"`,
+        },
+      });
+    }
 
     const buffer = await generateSinglePumpWorkbook({
       companyName: pump.companyName,
@@ -91,15 +170,11 @@ export async function GET(request: NextRequest) {
       pumpCode: pump.pumpCode,
       pumpTypeName: pump.pumpTypeName,
       engineBrandName: pump.engineBrandName,
-      unitStatus: latest?.unitStatus ?? pump.currentUnitStatus,
-      inspectedAt: latest?.inspectedAt ?? "-",
-      inspectorName: latest?.inspectorName ?? "-",
-      notes: latest?.notes ?? "",
-      items: items.map((item) => ({
-        ...item,
-        issueLabel: item.issueLabel ?? "",
-        notes: item.notes ?? "",
-      })),
+      unitStatus: inspection?.unitStatus ?? pump.currentUnitStatus,
+      inspectedAt: inspection?.inspectedAt ?? "-",
+      inspectorName: inspection?.inspectorName ?? "-",
+      notes: inspection?.notes ?? "",
+      items: mappedItems,
     });
 
     return new NextResponse(new Uint8Array(buffer), {

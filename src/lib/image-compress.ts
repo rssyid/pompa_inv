@@ -1,7 +1,7 @@
 export async function compressImageFile(
   file: File,
   maxDimension = 1280,
-  quality = 0.78
+  quality = 0.82
 ): Promise<File> {
   if (!file.type.startsWith("image/")) return file;
 
@@ -32,10 +32,10 @@ export async function compressImageFile(
   ctx.drawImage(img, 0, 0, width, height);
 
   const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, "image/webp", quality);
+    canvas.toBlob(resolve, "image/jpeg", quality);
   });
 
   if (!blob) return file;
-  const cleanName = file.name.replace(/\.[^.]+$/, "") + ".webp";
-  return new File([blob], cleanName, { type: "image/webp" });
+  const cleanName = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+  return new File([blob], cleanName, { type: "image/jpeg" });
 }
