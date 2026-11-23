@@ -10,6 +10,9 @@ import {
   MasterTreeData,
 } from "@/components/HierarchyFilterBar";
 import {
+  OperatingHoursPrintReport,
+} from "@/components/OperatingHoursPrintReport";
+import {
   ReportFilterSummaryItem,
   ReportPrintScope,
   ReportsPrintReport,
@@ -22,6 +25,7 @@ import {
 } from "@/components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
+import type { OperatingHoursMonitoringPayload } from "@/lib/queries/operating-hours";
 
 const STATUS_LABEL_MAP: Record<string, string> = {
   aktif: "Aktif",
@@ -92,13 +96,20 @@ function buildFilterMeta(
 export default function ReportsPage() {
   const { user, master, ensureLoaded, error: bootError } = useAppData();
   const [report, setReport] = useState<ReportSummaryPayload | null>(null);
-  const [activeTab, setActiveTab] = useState<"units" | "issues">("units");
+  const [ohReport, setOhReport] = useState<OperatingHoursMonitoringPayload | null>(null);
+  const [activeTab, setActiveTab] = useState<"units" | "issues" | "operating-hours">("units");
   const [previewPrint, setPreviewPrint] = useState(false);
   const [printScope, setPrintScope] = useState<ReportPrintScope>("all");
   const [pageBreakIssues, setPageBreakIssues] = useState(false);
   const [printedAt, setPrintedAt] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [ohMonth, setOhMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [ohWindowPreset, setOhWindowPreset] = useState<"7d" | "14d" | "full" | "custom">("14d");
+  const [ohDateFrom, setOhDateFrom] = useState("");
+  const [ohDateTo, setOhDateTo] = useState("");
+  const [showMobileMatrix, setShowMobileMatrix] = useState(false);
+
   const abortRef = useRef<AbortController | null>(null);
   const [filters, setFilters] = useState<FilterValues>({
     companyId: "",
@@ -130,19 +141,56 @@ export default function ReportsPage() {
     []
   );
 
+  const buildOhQueryString = useCallback(
+    (
+      f: FilterValues,
+      month: string,
+      preset: "7d" | "14d" | "full" | "custom",
+      dFrom: string,
+      dTo: string
+    ) => {
+      const params = new URLSearchParams(buildQueryString(f, "", ""));
+      params.set("month", month);
+      if (preset === "custom") {
+        if (dFrom) params.set("dateFrom", dFrom);
+        if (dTo) params.set("dateTo", dTo);
+      } else {
+        params.set("windowPreset", preset);
+      }
+      return params.toString();
+    },
+    [buildQueryString]
+  );
+
   const loadReport = useCallback(
-    async (f: FilterValues, dFrom: string, dTo: string) => {
+    async (
+      f: FilterValues,
+      dFrom: string,
+      dTo: string,
+      month = ohMonth,
+      preset = ohWindowPreset,
+      oFrom = ohDateFrom,
+      oTo = ohDateTo
+    ) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       const qs = buildQueryString(f, dFrom, dTo);
-      const res = await fetchJson<ReportSummaryPayload>(`/api/reports/summary?${qs}`, {
-        signal: controller.signal,
-      });
-      setReport(res);
+      const ohQs = buildOhQueryString(f, month, preset, oFrom, oTo);
+
+      const [summaryRes, ohRes] = await Promise.all([
+        fetchJson<ReportSummaryPayload>(`/api/reports/summary?${qs}`, {
+          signal: controller.signal,
+        }),
+        fetchJson<OperatingHoursMonitoringPayload>(`/api/reports/operating-hours?${ohQs}`, {
+          signal: controller.signal,
+        }),
+      ]);
+      setReport(summaryRes);
+      setOhReport(ohRes);
     },
-    [buildQueryString]
+    [buildOhQueryString, buildQueryString, ohDateFrom, ohDateTo, ohMonth, ohWindowPreset]
   );
 
   const loadInitial = useCallback(async () => {
@@ -159,6 +207,13 @@ export default function ReportsPage() {
   }, [dateFrom, dateTo, ensureLoaded, filters, loadReport]);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const tabParam = sp.get("tab");
+      if (tabParam === "operating-hours" || tabParam === "issues" || tabParam === "units") {
+        setActiveTab(tabParam);
+      }
+    }
     loadInitial();
     setPrintedAt(formatNowLabel());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -175,12 +230,20 @@ export default function ReportsPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewPrint]);
 
-  async function applyFilters(nextF: FilterValues, nextFrom = dateFrom, nextTo = dateTo) {
+  async function applyFilters(
+    nextF: FilterValues,
+    nextFrom = dateFrom,
+    nextTo = dateTo,
+    nextOhMonth = ohMonth,
+    nextOhPreset = ohWindowPreset,
+    nextOhFrom = ohDateFrom,
+    nextOhTo = ohDateTo
+  ) {
     setFilters(nextF);
     setRefreshing(true);
     setError(null);
     try {
-      await loadReport(nextF, nextFrom, nextTo);
+      await loadReport(nextF, nextFrom, nextTo, nextOhMonth, nextOhPreset, nextOhFrom, nextOhTo);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal memperbarui laporan.");
@@ -226,13 +289,22 @@ export default function ReportsPage() {
     );
   }
 
-  const exportUrl = `/api/reports/export?type=recap&${buildQueryString(filters, dateFrom, dateTo)}`;
+  const exportUrl =
+    activeTab === "operating-hours"
+      ? `/api/reports/export?type=operating-hours&${buildOhQueryString(
+          filters,
+          ohMonth,
+          ohWindowPreset,
+          ohDateFrom,
+          ohDateTo
+        )}`
+      : `/api/reports/export?type=recap&${buildQueryString(filters, dateFrom, dateTo)}`;
 
   return (
     <AppShell
       user={user}
-      title="Laporan Kondisi Pompa"
-      subtitle="Rekap kondisi unit dan daftar komponen rusak/hilang siap export Excel atau cetak A4."
+      title="Laporan Kondisi & Jam Kerja Pompa"
+      subtitle="Rekap kondisi unit, daftar komponen bermasalah, serta monitoring jam operasional harian dan bulanan."
     >
       {previewPrint && report ? (
         <div className="space-y-4">
@@ -248,35 +320,39 @@ export default function ReportsPage() {
                 <span>Tutup Pratinjau</span>
               </button>
 
-              <div>
-                <label
-                  htmlFor="preview-print-scope"
-                  className="mb-1 block text-xs font-semibold text-field-muted"
-                >
-                  Cakupan Cetak A4
-                </label>
-                <select
-                  id="preview-print-scope"
-                  value={printScope}
-                  onChange={(e) => setPrintScope(e.target.value as ReportPrintScope)}
-                  className="min-h-[44px] rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
-                >
-                  <option value="all">Lengkap (Estate + Unit + Temuan)</option>
-                  <option value="estate_units">Rekap Estate &amp; Kondisi Unit</option>
-                  <option value="issues">Part Bermasalah &amp; Hilang Saja</option>
-                </select>
-              </div>
+              {activeTab !== "operating-hours" && (
+                <>
+                  <div>
+                    <label
+                      htmlFor="preview-print-scope"
+                      className="mb-1 block text-xs font-semibold text-field-muted"
+                    >
+                      Cakupan Cetak A4
+                    </label>
+                    <select
+                      id="preview-print-scope"
+                      value={printScope}
+                      onChange={(e) => setPrintScope(e.target.value as ReportPrintScope)}
+                      className="min-h-[44px] rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                    >
+                      <option value="all">Lengkap (Estate + Unit + Temuan)</option>
+                      <option value="estate_units">Rekap Estate &amp; Kondisi Unit</option>
+                      <option value="issues">Part Bermasalah &amp; Hilang Saja</option>
+                    </select>
+                  </div>
 
-              {printScope === "all" && (
-                <label className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-field-border bg-field-bg px-3 text-xs font-medium text-field-ink">
-                  <input
-                    type="checkbox"
-                    checked={pageBreakIssues}
-                    onChange={(e) => setPageBreakIssues(e.target.checked)}
-                    className="h-4 w-4 accent-[#15803D]"
-                  />
-                  <span>Pisah halaman untuk Part Bermasalah</span>
-                </label>
+                  {printScope === "all" && (
+                    <label className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-field-border bg-field-bg px-3 text-xs font-medium text-field-ink">
+                      <input
+                        type="checkbox"
+                        checked={pageBreakIssues}
+                        onChange={(e) => setPageBreakIssues(e.target.checked)}
+                        className="h-4 w-4 accent-[#15803D]"
+                      />
+                      <span>Pisah halaman untuk Part Bermasalah</span>
+                    </label>
+                  )}
+                </>
               )}
             </div>
 
@@ -300,21 +376,30 @@ export default function ReportsPage() {
           </div>
 
           <p className="no-print text-xs text-field-muted">
-            Pratinjau kertas A4 Portrait (210 x 297 mm). Pada layar sempit, geser kertas ke
-            samping untuk memeriksa kolom sebelum mencetak. Tekan Esc untuk menutup pratinjau.
+            {activeTab === "operating-hours"
+              ? "Pratinjau kertas A4 Landscape (297 x 210 mm). Pada layar sempit, geser ke samping untuk memeriksa seluruh kolom tanggal. Tekan Esc untuk menutup."
+              : "Pratinjau kertas A4 Portrait (210 x 297 mm). Pada layar sempit, geser kertas ke samping untuk memeriksa kolom sebelum mencetak. Tekan Esc untuk menutup pratinjau."}
           </p>
 
           <div className="overflow-x-auto rounded-lg border border-field-border bg-[#EAEFEA] p-2 sm:p-5 print:overflow-visible print:border-0 print:bg-transparent print:p-0">
-            <ReportsPrintReport
-              report={report}
-              scope={printScope}
-              companyTitle={companyTitle}
-              filterItems={filterItems}
-              printedBy={user.name}
-              printedAt={printedAt || formatNowLabel()}
-              pageBreakBeforeIssues={pageBreakIssues}
-              forceShow
-            />
+            {activeTab === "operating-hours" && ohReport ? (
+              <OperatingHoursPrintReport
+                report={ohReport}
+                companyTitle={companyTitle}
+                forceShow
+              />
+            ) : (
+              <ReportsPrintReport
+                report={report}
+                scope={printScope}
+                companyTitle={companyTitle}
+                filterItems={filterItems}
+                printedBy={user.name}
+                printedAt={printedAt || formatNowLabel()}
+                pageBreakBeforeIssues={pageBreakIssues}
+                forceShow
+              />
+            )}
           </div>
         </div>
       ) : (
@@ -331,62 +416,168 @@ export default function ReportsPage() {
             )}
 
             <div className="flex flex-col gap-3 rounded-lg border border-field-border bg-field-surface p-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div>
-                  <label
-                    htmlFor="report-date-from"
-                    className="mb-1 block text-xs font-semibold text-field-muted"
-                  >
-                    Dari Tanggal Periksa
-                  </label>
-                  <input
-                    id="report-date-from"
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => {
-                      setDateFrom(e.target.value);
-                      applyFilters(filters, e.target.value, dateTo);
-                    }}
-                    className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
-                  />
+              {activeTab === "operating-hours" ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <label
+                      htmlFor="oh-month"
+                      className="mb-1 block text-xs font-semibold text-field-muted"
+                    >
+                      Bulan Monitoring
+                    </label>
+                    <input
+                      id="oh-month"
+                      type="month"
+                      value={ohMonth}
+                      onChange={(e) => {
+                        const nextMonth = e.target.value;
+                        if (!nextMonth) return;
+                        setOhMonth(nextMonth);
+                        applyFilters(filters, dateFrom, dateTo, nextMonth, ohWindowPreset, "", "");
+                      }}
+                      className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="oh-window"
+                      className="mb-1 block text-xs font-semibold text-field-muted"
+                    >
+                      Rentang Kolom Tanggal
+                    </label>
+                    <select
+                      id="oh-window"
+                      value={ohWindowPreset}
+                      onChange={(e) => {
+                        const preset = e.target.value as "7d" | "14d" | "full" | "custom";
+                        setOhWindowPreset(preset);
+                        if (preset !== "custom") {
+                          applyFilters(filters, dateFrom, dateTo, ohMonth, preset, "", "");
+                        }
+                      }}
+                      className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                    >
+                      <option value="7d">7 Hari Terakhir</option>
+                      <option value="14d">14 Hari Terakhir</option>
+                      <option value="full">1 Bulan Penuh</option>
+                      <option value="custom">Pilih Tanggal Khusus</option>
+                    </select>
+                  </div>
+                  {ohWindowPreset === "custom" && (
+                    <>
+                      <div>
+                        <label
+                          htmlFor="oh-from"
+                          className="mb-1 block text-xs font-semibold text-field-muted"
+                        >
+                          Dari Tanggal
+                        </label>
+                        <input
+                          id="oh-from"
+                          type="date"
+                          value={ohDateFrom}
+                          onChange={(e) => {
+                            setOhDateFrom(e.target.value);
+                            applyFilters(
+                              filters,
+                              dateFrom,
+                              dateTo,
+                              ohMonth,
+                              "custom",
+                              e.target.value,
+                              ohDateTo
+                            );
+                          }}
+                          className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="oh-to"
+                          className="mb-1 block text-xs font-semibold text-field-muted"
+                        >
+                          Sampai Tanggal
+                        </label>
+                        <input
+                          id="oh-to"
+                          type="date"
+                          value={ohDateTo}
+                          onChange={(e) => {
+                            setOhDateTo(e.target.value);
+                            applyFilters(
+                              filters,
+                              dateFrom,
+                              dateTo,
+                              ohMonth,
+                              "custom",
+                              ohDateFrom,
+                              e.target.value
+                            );
+                          }}
+                          className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div>
-                  <label
-                    htmlFor="report-date-to"
-                    className="mb-1 block text-xs font-semibold text-field-muted"
-                  >
-                    Sampai Tanggal
-                  </label>
-                  <input
-                    id="report-date-to"
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => {
-                      setDateTo(e.target.value);
-                      applyFilters(filters, dateFrom, e.target.value);
-                    }}
-                    className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
-                  />
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div>
+                    <label
+                      htmlFor="report-date-from"
+                      className="mb-1 block text-xs font-semibold text-field-muted"
+                    >
+                      Dari Tanggal Periksa
+                    </label>
+                    <input
+                      id="report-date-from"
+                      type="date"
+                      value={dateFrom}
+                      onChange={(e) => {
+                        setDateFrom(e.target.value);
+                        applyFilters(filters, e.target.value, dateTo);
+                      }}
+                      className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="report-date-to"
+                      className="mb-1 block text-xs font-semibold text-field-muted"
+                    >
+                      Sampai Tanggal
+                    </label>
+                    <input
+                      id="report-date-to"
+                      type="date"
+                      value={dateTo}
+                      onChange={(e) => {
+                        setDateTo(e.target.value);
+                        applyFilters(filters, dateFrom, e.target.value);
+                      }}
+                      className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="report-print-scope"
+                      className="mb-1 block text-xs font-semibold text-field-muted"
+                    >
+                      Cakupan Cetak A4
+                    </label>
+                    <select
+                      id="report-print-scope"
+                      value={printScope}
+                      onChange={(e) => setPrintScope(e.target.value as ReportPrintScope)}
+                      className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                    >
+                      <option value="all">Lengkap (Estate + Unit + Temuan)</option>
+                      <option value="estate_units">Rekap Estate &amp; Unit</option>
+                      <option value="issues">Part Bermasalah Saja</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label
-                    htmlFor="report-print-scope"
-                    className="mb-1 block text-xs font-semibold text-field-muted"
-                  >
-                    Cakupan Cetak A4
-                  </label>
-                  <select
-                    id="report-print-scope"
-                    value={printScope}
-                    onChange={(e) => setPrintScope(e.target.value as ReportPrintScope)}
-                    className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
-                  >
-                    <option value="all">Lengkap (Estate + Unit + Temuan)</option>
-                    <option value="estate_units">Rekap Estate &amp; Unit</option>
-                    <option value="issues">Part Bermasalah Saja</option>
-                  </select>
-                </div>
-              </div>
+              )}
 
               <div className="flex flex-wrap items-center gap-2">
                 <a
@@ -394,7 +585,11 @@ export default function ReportsPage() {
                   className="inline-flex min-h-[44px] items-center gap-2 rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover"
                 >
                   <Download className="h-4 w-4" aria-hidden="true" />
-                  <span>Export Excel (.xlsx)</span>
+                  <span>
+                    {activeTab === "operating-hours"
+                      ? "Export Excel Monitoring (.xlsx)"
+                      : "Export Excel (.xlsx)"}
+                  </span>
                 </a>
                 <button
                   type="button"
@@ -403,7 +598,9 @@ export default function ReportsPage() {
                   className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-field-border bg-field-bg px-3.5 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA] disabled:opacity-50"
                 >
                   <Eye className="h-4 w-4" aria-hidden="true" />
-                  <span>Pratinjau A4</span>
+                  <span>
+                    {activeTab === "operating-hours" ? "Pratinjau A4 Landscape" : "Pratinjau A4"}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -498,6 +695,21 @@ export default function ReportsPage() {
                   }`}
                 >
                   Part Bermasalah &amp; Hilang ({report.issues.length})
+                </button>
+                <button
+                  role="tab"
+                  id="tab-operating-hours"
+                  type="button"
+                  aria-selected={activeTab === "operating-hours"}
+                  aria-controls="panel-operating-hours"
+                  onClick={() => setActiveTab("operating-hours")}
+                  className={`min-h-[44px] rounded-md border px-4 text-sm font-semibold ${
+                    activeTab === "operating-hours"
+                      ? "border-[#15803D] bg-[#DCFCE7] text-[#166534]"
+                      : "border-field-border bg-field-surface text-field-ink hover:bg-field-bg"
+                  }`}
+                >
+                  Monitoring Jam Operasional ({ohReport?.totalPumps ?? report.pumps.length})
                 </button>
               </div>
 
@@ -711,21 +923,176 @@ export default function ReportsPage() {
                   )}
                 </div>
               )}
+              {activeTab === "operating-hours" && ohReport && (
+                <div
+                  role="tabpanel"
+                  id="panel-operating-hours"
+                  aria-labelledby="tab-operating-hours"
+                  className="space-y-4"
+                >
+                  {ohReport.regions.length === 0 ? (
+                    <div className="rounded-lg border border-field-border bg-field-surface p-4">
+                      <EmptyState
+                        title="Tidak ada data pompa pada filter ini"
+                        description="Ubah filter PT, Region, Estate, atau Blok untuk melihat monitoring jam operasional."
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-field-border bg-field-surface px-4 py-3 text-xs">
+                        <p className="text-field-muted">
+                          Periode tampil:{" "}
+                          <span className="font-mono font-semibold text-field-ink">
+                            {ohReport.dateFrom} s/d {ohReport.dateTo}
+                          </span>{" "}
+                          (Total Jam/Bln dihitung penuh sebulan{" "}
+                          <span className="font-semibold text-field-ink">
+                            {ohReport.monthLabel}
+                          </span>
+                          )
+                        </p>
+                        <p className="font-mono font-bold text-[#166534] tabular-nums">
+                          Grand Total: {ohReport.grandTotalHoursMonth} jam
+                        </p>
+                      </div>
+
+                      {/* Mobile Toggle for Full Matrix vs Reflow Cards */}
+                      <div className="flex justify-end md:hidden">
+                        <button
+                          type="button"
+                          onClick={() => setShowMobileMatrix((v) => !v)}
+                          className="min-h-[44px] rounded-md border border-field-border bg-field-surface px-3 text-xs font-semibold text-field-ink"
+                        >
+                          {showMobileMatrix ? "Lihat Tampilan Kartu Mobile" : "Lihat Format Tabel Lengkap"}
+                        </button>
+                      </div>
+
+                      {!showMobileMatrix && (
+                        <div className="space-y-4 md:hidden">
+                          {ohReport.regions.map((group) => (
+                            <section
+                              key={group.regionName}
+                              className="rounded-lg border border-field-border bg-field-surface"
+                            >
+                              <div className="flex items-center justify-between gap-2 border-b border-field-border bg-field-bg px-4 py-2.5">
+                                <h3 className="text-sm font-bold text-field-ink">
+                                  {group.regionName}
+                                </h3>
+                                <span className="font-mono text-xs font-bold text-[#166534] tabular-nums">
+                                  {group.regionTotalHoursMonth} jam
+                                </span>
+                              </div>
+                              <ul className="divide-y divide-field-border">
+                                {group.pumps.map((p) => (
+                                  <li key={p.pumpId} className="space-y-2 p-3.5 text-xs">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div>
+                                        <p className="font-mono text-sm font-bold text-field-ink">
+                                          {p.no}. {p.pumpCode}
+                                        </p>
+                                        <p className="text-field-muted">
+                                          {p.estateName} /{" "}
+                                          <span className="font-mono font-semibold text-field-ink">
+                                            {p.blockCode}
+                                          </span>{" "}
+                                          ({p.pumpTypeShort})
+                                        </p>
+                                      </div>
+                                      <div className="text-right">
+                                        <span
+                                          className={`inline-block rounded border px-2 py-0.5 font-semibold ${
+                                            p.kondisi === "Baik"
+                                              ? "border-[#86EFAC] bg-[#DCFCE7] text-[#166534]"
+                                              : "border-[#FCA5A5] bg-[#FEE2E2] text-[#991B1B]"
+                                          }`}
+                                        >
+                                          {p.kondisi}
+                                        </span>
+                                        <p className="mt-1 font-mono font-bold text-field-ink tabular-nums">
+                                          {p.totalHoursMonth} jam/bln
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    {p.isPreOrder ? (
+                                      <div className="rounded border border-[#FCD34D] bg-[#FFFBEB] px-2.5 py-1.5 text-center font-bold text-[#92400E]">
+                                        PRE ORDER
+                                      </div>
+                                    ) : (
+                                      <div className="flex gap-1.5 overflow-x-auto pb-1">
+                                        {p.cells.map((c, cIdx) => {
+                                          const colMeta = ohReport.dates[cIdx];
+                                          return (
+                                            <div
+                                              key={c.date}
+                                              className={`min-w-[40px] shrink-0 rounded border text-center ${
+                                                c.type === "rusak"
+                                                  ? "border-[#DC2626] bg-[#DC2626] text-white"
+                                                  : "border-field-border bg-field-bg text-field-ink"
+                                              }`}
+                                            >
+                                              <div
+                                                className={`border-b px-1 py-0.5 font-mono text-[10px] font-bold ${
+                                                  c.type === "rusak"
+                                                    ? "border-white/30 text-white"
+                                                    : colMeta?.isSunday
+                                                      ? "border-field-border bg-[#FEE2E2] text-[#DC2626]"
+                                                      : "border-field-border text-field-muted"
+                                                }`}
+                                              >
+                                                {colMeta?.day}
+                                              </div>
+                                              <div className="px-1 py-1 font-mono text-xs font-bold tabular-nums">
+                                                {c.value}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    <p className="text-field-muted">
+                                      {p.operationalNote}
+                                      {p.repairStatus ? ` • Status: ${p.repairStatus}` : ""}
+                                    </p>
+                                  </li>
+                                ))}
+                              </ul>
+                            </section>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className={showMobileMatrix ? "block" : "hidden md:block"}>
+                        <OperatingHoursPrintReport
+                          report={ohReport}
+                          companyTitle={companyTitle}
+                          screenInteractive
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
       )}
 
       {!previewPrint && report && (
-        <ReportsPrintReport
-          report={report}
-          scope={printScope}
-          companyTitle={companyTitle}
-          filterItems={filterItems}
-          printedBy={user.name}
-          printedAt={printedAt || formatNowLabel()}
-          pageBreakBeforeIssues={pageBreakIssues}
-        />
+        activeTab === "operating-hours" && ohReport ? (
+          <OperatingHoursPrintReport report={ohReport} companyTitle={companyTitle} />
+        ) : (
+          <ReportsPrintReport
+            report={report}
+            scope={printScope}
+            companyTitle={companyTitle}
+            filterItems={filterItems}
+            printedBy={user.name}
+            printedAt={printedAt || formatNowLabel()}
+            pageBreakBeforeIssues={pageBreakIssues}
+          />
+        )
       )}
     </AppShell>
   );

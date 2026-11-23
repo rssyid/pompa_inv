@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ClipboardCheck, Download, Eye, FileText, Printer, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Clock, Download, Eye, FileText, Lock, MapPin, Printer, X } from "lucide-react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
+import { PumpLocationDialog } from "@/components/PumpLocationDialog";
 import { PumpPrintReport } from "@/components/PumpPrintReport";
 import {
   AvailabilityLabel,
@@ -14,17 +15,35 @@ import {
 } from "@/components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
+import { getPumpLocationBadgeInfo } from "@/lib/pump-location";
 
 interface PumpDetail {
   id: number;
   pumpCode: string;
   currentUnitStatus: string;
-  blockCode: string;
-  estateCode: string;
-  regionName: string;
-  companyName: string;
+  blockId: number | null;
+  blockCode: string | null;
+  estateId: number | null;
+  estateCode: string | null;
+  regionName: string | null;
+  companyName: string | null;
   pumpTypeName: string;
   engineBrandName: string;
+  isLocationAssigned: boolean;
+  operationalNote: string | null;
+  operationalCategory: string;
+  repairStatus: string | null;
+  isPreOrder: boolean;
+  breakdownStartDate: string | null;
+}
+
+interface OperatingLogEntry {
+  id: number;
+  logDate: string;
+  operatingHours: number;
+  dayStatus: string;
+  notes: string | null;
+  recordedByName: string;
 }
 
 interface InspectionItemRow {
@@ -59,12 +78,23 @@ interface InspectionRecord {
 
 export default function PumpDetailPage() {
   const params = useParams<{ id: string }>();
-  const { user, ensureLoaded, error: bootError } = useAppData();
+  const { user, master, ensureLoaded, refreshMaster, error: bootError } = useAppData();
   const [pump, setPump] = useState<PumpDetail | null>(null);
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
+  const [operatingLogs, setOperatingLogs] = useState<OperatingLogEntry[]>([]);
+  const [monthlyHoursTotal, setMonthlyHoursTotal] = useState(0);
+  const [monthLabel, setMonthLabel] = useState("");
   const [selectedInspectionId, setSelectedInspectionId] = useState<number | null>(null);
   const [lightboxPhoto, setLightboxPhoto] = useState<InspectionPhotoRow | null>(null);
   const [previewPrint, setPreviewPrint] = useState(false);
+  const [locationDialogTab, setLocationDialogTab] = useState<"location" | "operational" | null>(null);
+
+  const [quickDate, setQuickDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [quickHours, setQuickHours] = useState("");
+  const [savingHours, setSavingHours] = useState(false);
+  const [hoursMessage, setHoursMessage] = useState<string | null>(null);
+  const [hoursError, setHoursError] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,12 +104,19 @@ export default function PumpDetailPage() {
     try {
       const [, detailRes] = await Promise.all([
         ensureLoaded(),
-        fetchJson<{ pump: PumpDetail; inspections: InspectionRecord[] }>(
-          `/api/pumps/${params.id}`
-        ),
+        fetchJson<{
+          pump: PumpDetail;
+          inspections: InspectionRecord[];
+          operatingLogs: OperatingLogEntry[];
+          monthlyHoursTotal: number;
+          monthLabel: string;
+        }>(`/api/pumps/${params.id}`),
       ]);
       setPump(detailRes.pump);
       setInspections(detailRes.inspections);
+      setOperatingLogs(detailRes.operatingLogs ?? []);
+      setMonthlyHoursTotal(detailRes.monthlyHoursTotal ?? 0);
+      setMonthLabel(detailRes.monthLabel ?? "");
       if (detailRes.inspections.length > 0) {
         setSelectedInspectionId(detailRes.inspections[0].id);
       }
@@ -89,6 +126,43 @@ export default function PumpDetailPage() {
       setLoading(false);
     }
   }, [ensureLoaded, params.id]);
+
+  async function handleQuickSaveHours(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pump) return;
+    setHoursError(null);
+    setHoursMessage(null);
+
+    const trimmed = quickHours.trim();
+    const num = trimmed === "" ? null : Number(trimmed);
+    if (num !== null && (!Number.isFinite(num) || num < 0 || num > 24)) {
+      setHoursError("Jam kerja harus bernilai antara 0 sampai 24 jam.");
+      return;
+    }
+
+    setSavingHours(true);
+    try {
+      await fetchJson("/api/operating-hours", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          logDate: quickDate,
+          entries: [{ pumpId: pump.id, operatingHours: num }],
+        }),
+      });
+      await loadData();
+      setHoursMessage(
+        num && num > 0
+          ? `Jam kerja tanggal ${quickDate} (${num} jam) tersimpan.`
+          : `Catatan jam tanggal ${quickDate} dikosongkan.`
+      );
+      setQuickHours("");
+    } catch (err) {
+      setHoursError(err instanceof Error ? err.message : "Gagal menyimpan jam kerja.");
+    } finally {
+      setSavingHours(false);
+    }
+  }
 
   useEffect(() => {
     loadData();
@@ -124,12 +198,17 @@ export default function PumpDetailPage() {
 
   const activeInspection =
     inspections.find((ins) => ins.id === selectedInspectionId) ?? inspections[0] ?? null;
+  const locBadge = getPumpLocationBadgeInfo({
+    blockId: pump.blockId,
+    blockCode: pump.blockCode,
+    estateCode: pump.estateCode,
+  });
 
   return (
     <AppShell
       user={user}
       title={`Pompa ${pump.pumpCode}`}
-      subtitle={`${pump.companyName} / ${pump.regionName} / ${pump.estateCode} / Blok ${pump.blockCode}`}
+      subtitle={`${pump.companyName ?? "PT TH Indoplantation"} / ${pump.regionName ?? "-"} / ${locBadge.label}`}
     >
       {previewPrint ? (
         <div className="space-y-4">
@@ -227,23 +306,35 @@ export default function PumpDetailPage() {
         <section className="rounded-lg border border-field-border bg-field-surface p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-field-border pb-4">
             <div>
-              <p className="text-xs font-semibold text-field-muted">{pump.companyName}</p>
+              <p className="text-xs font-semibold text-field-muted">
+                {pump.companyName ?? "PT TH Indoplantation"}
+              </p>
               <h2 className="mt-0.5 font-mono text-xl font-bold text-field-ink">
                 {pump.pumpCode}
               </h2>
             </div>
-            <UnitStatusBadge status={pump.currentUnitStatus} />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setLocationDialogTab("location")}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-md border border-field-border bg-field-bg px-3 text-xs font-semibold text-field-ink hover:bg-[#EAEFEA]"
+              >
+                <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{locBadge.assigned ? "Pindah Lokasi" : "Assign Lokasi"}</span>
+              </button>
+              <UnitStatusBadge status={pump.currentUnitStatus} />
+            </div>
           </div>
 
           <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
             <div>
               <dt className="text-xs font-semibold text-field-muted">Region</dt>
-              <dd className="mt-0.5 font-medium text-field-ink">{pump.regionName}</dd>
+              <dd className="mt-0.5 font-medium text-field-ink">{pump.regionName ?? "-"}</dd>
             </div>
             <div>
               <dt className="text-xs font-semibold text-field-muted">Estate / Block</dt>
               <dd className="mt-0.5 font-mono font-semibold text-field-ink">
-                {pump.estateCode} / {pump.blockCode}
+                {locBadge.label}
               </dd>
             </div>
             <div>
@@ -255,6 +346,154 @@ export default function PumpDetailPage() {
               <dd className="mt-0.5 font-medium text-field-ink">{pump.engineBrandName}</dd>
             </div>
           </dl>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-field-border pt-3 text-xs">
+            <div className="space-y-0.5 text-field-muted">
+              <p>
+                <span className="font-semibold text-field-ink">Keterangan Monitoring: </span>
+                {pump.operationalNote || "-"}
+              </p>
+              {(pump.repairStatus || pump.isPreOrder) && (
+                <p>
+                  <span className="font-semibold text-field-ink">Status Tindak Lanjut: </span>
+                  {pump.repairStatus || "-"}
+                  {pump.isPreOrder ? " (PRE ORDER)" : ""}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLocationDialogTab("operational")}
+              className="min-h-[36px] rounded border border-field-border bg-field-bg px-2.5 text-xs font-semibold text-field-ink hover:bg-[#EAEFEA]"
+            >
+              Edit Keterangan / PO
+            </button>
+          </div>
+        </section>
+
+        {/* Operating Hours Quick Entry + Monthly Summary */}
+        <section className="no-print rounded-lg border border-field-border bg-field-surface p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-field-border pb-3">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-field-accent" aria-hidden="true" />
+              <div>
+                <h2 className="text-base font-bold text-field-ink">
+                  Jam Operasional ({monthLabel || "Bulan Ini"})
+                </h2>
+                <p className="text-xs text-field-muted">
+                  Total akumulasi bulan ini:{" "}
+                  <span className="font-mono font-bold text-field-ink tabular-nums">
+                    {monthlyHoursTotal} jam
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {hoursError && (
+            <div className="mt-3 rounded-md border border-[#FCA5A5] bg-[#FEE2E2] px-3 py-2 text-xs font-semibold text-[#991B1B]">
+              {hoursError}
+            </div>
+          )}
+          {hoursMessage && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-3 rounded-md border border-[#86EFAC] bg-[#DCFCE7] px-3 py-2 text-xs font-semibold text-[#166534]"
+            >
+              {hoursMessage}
+            </div>
+          )}
+
+          {!pump.isLocationAssigned ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#FCD34D] bg-[#FFFBEB] p-3 text-xs text-[#92400E]">
+              <span className="inline-flex items-center gap-2 font-semibold">
+                <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>
+                  Pompa belum di-assign ke blok lapangan ({locBadge.label}). Tetapkan lokasi dulu
+                  untuk mencatat jam kerja.
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setLocationDialogTab("location")}
+                className="min-h-[40px] rounded-md bg-[#92400E] px-3 text-xs font-semibold text-white"
+              >
+                Assign Lokasi Sekarang
+              </button>
+            </div>
+          ) : (
+            <form
+              onSubmit={handleQuickSaveHours}
+              className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end"
+            >
+              <div>
+                <label
+                  htmlFor="detail-oh-date"
+                  className="mb-1 block text-xs font-semibold text-field-muted"
+                >
+                  Tanggal Operasi
+                </label>
+                <input
+                  id="detail-oh-date"
+                  type="date"
+                  required
+                  value={quickDate}
+                  onChange={(e) => setQuickDate(e.target.value)}
+                  className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm sm:w-auto"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="detail-oh-hours"
+                  className="mb-1 block text-xs font-semibold text-field-muted"
+                >
+                  Jam Kerja (0 - 24)
+                </label>
+                <input
+                  id="detail-oh-hours"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  max={24}
+                  step="0.5"
+                  value={quickHours}
+                  onChange={(e) => setQuickHours(e.target.value)}
+                  placeholder="Contoh: 6"
+                  className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 font-mono text-sm font-bold tabular-nums sm:w-36"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={savingHours}
+                className="min-h-[44px] rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover disabled:opacity-60"
+              >
+                {savingHours ? "Menyimpan..." : "Catat Jam Kerja"}
+              </button>
+            </form>
+          )}
+
+          {operatingLogs.length > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-semibold text-field-muted">
+                Catatan Operasi Bulan Ini ({operatingLogs.length} hari)
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {operatingLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="rounded border border-field-border bg-field-bg px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="font-mono font-semibold text-field-ink">{log.logDate}</span>
+                    <span className="mx-1.5 text-field-muted">:</span>
+                    <span className="font-mono font-bold text-[#166534] tabular-nums">
+                      {log.operatingHours} jam
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {inspections.length === 0 ? (
@@ -449,6 +688,21 @@ export default function PumpDetailPage() {
       )}
 
       {!previewPrint && <PumpPrintReport pump={pump} inspection={activeInspection} />}
+
+      {locationDialogTab && master && (
+        <PumpLocationDialog
+          pump={pump}
+          master={master}
+          initialTab={locationDialogTab}
+          onClose={() => setLocationDialogTab(null)}
+          onSaved={async (createdBlock) => {
+            if (createdBlock) {
+              await refreshMaster();
+            }
+            await loadData();
+          }}
+        />
+      )}
     </AppShell>
   );
 }

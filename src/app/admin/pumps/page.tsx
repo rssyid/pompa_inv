@@ -3,13 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
+import { PumpLocationDialog } from "@/components/PumpLocationDialog";
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { ErrorState, LoadingState } from "@/components/UiStates";
 import { EnrichedPump, fetchJson } from "@/lib/client-fetch";
+import { getPumpLocationBadgeInfo } from "@/lib/pump-location";
 
 export default function AdminPumpsPage() {
-  const { user, master, ensureLoaded, error: bootError } = useAppData();
+  const { user, master, ensureLoaded, refreshMaster, error: bootError } = useAppData();
   const [pumps, setPumps] = useState<EnrichedPump[]>([]);
+  const [editingPump, setEditingPump] = useState<EnrichedPump | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +82,8 @@ export default function AdminPumpsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pumpCode,
-          blockId: Number(blockId),
+          estateId: estateId ? Number(estateId) : null,
+          blockId: blockId ? Number(blockId) : null,
           pumpTypeId: Number(pumpTypeId),
           engineBrandId: Number(engineBrandId),
         }),
@@ -234,16 +238,15 @@ export default function AdminPumpsPage() {
 
             <div>
               <label htmlFor="add-block" className="mb-1 block text-xs font-semibold text-field-muted">
-                Block
+                Block / Posisi (Opsional)
               </label>
               <select
                 id="add-block"
-                required
                 value={blockId}
                 onChange={(e) => setBlockId(e.target.value)}
                 className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm"
               >
-                <option value="">Pilih Block</option>
+                <option value="">Belum Assign Lokasi</option>
                 {blocks.map((b) => (
                   <option key={b.id} value={String(b.id)}>
                     {b.code}
@@ -307,7 +310,7 @@ export default function AdminPumpsPage() {
             <div className="flex items-end">
               <button
                 type="submit"
-                disabled={saving || !blockId}
+                disabled={saving || !pumpCode.trim()}
                 className="min-h-[44px] w-full rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover disabled:opacity-60"
               >
                 {saving ? "Menyimpan..." : "Simpan Unit Pompa"}
@@ -335,33 +338,68 @@ export default function AdminPumpsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-field-border">
-                {pumps.map((p) => (
-                  <tr key={p.id} className={!p.isActive ? "bg-field-bg/60 opacity-70" : ""}>
-                    <td className="px-3 py-2.5 font-mono font-semibold">{p.pumpCode}</td>
-                    <td className="px-3 py-2.5 text-xs">
-                      {p.regionName} / <strong>{p.estateCode}</strong> / {p.blockCode}
-                    </td>
-                    <td className="px-3 py-2.5">{p.pumpTypeName}</td>
-                    <td className="px-3 py-2.5">{p.engineBrandName}</td>
-                    <td className="px-3 py-2.5">
-                      <UnitStatusBadge status={p.currentUnitStatus} />
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => togglePumpActive(p)}
-                        className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                      >
-                        {p.isActive ? "Aktif (Nonaktifkan)" : "Nonaktif (Aktifkan)"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {pumps.map((p) => {
+                  const loc = getPumpLocationBadgeInfo({
+                    blockId: p.blockId,
+                    blockCode: p.blockCode,
+                    estateCode: p.estateCode,
+                  });
+                  return (
+                    <tr key={p.id} className={!p.isActive ? "bg-field-bg/60 opacity-70" : ""}>
+                      <td className="px-3 py-2.5 font-mono font-semibold">{p.pumpCode}</td>
+                      <td className="px-3 py-2.5 text-xs">
+                        {p.regionName ?? "-"} / <strong>{p.estateCode ?? "-"}</strong> /{" "}
+                        <span className={loc.assigned ? "font-mono font-semibold" : "text-[#92400E]"}>
+                          {loc.label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5">{p.pumpTypeName}</td>
+                      <td className="px-3 py-2.5">{p.engineBrandName}</td>
+                      <td className="px-3 py-2.5">
+                        <UnitStatusBadge status={p.currentUnitStatus} />
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingPump(p)}
+                            className="min-h-[44px] rounded border border-field-border bg-white px-3 text-xs font-semibold text-field-ink hover:bg-field-bg"
+                          >
+                            Lokasi / Info
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => togglePumpActive(p)}
+                            className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
+                          >
+                            {p.isActive ? "Aktif (Nonaktifkan)" : "Nonaktif (Aktifkan)"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </section>
       </div>
+
+      {editingPump && master && (
+        <PumpLocationDialog
+          pump={editingPump}
+          master={master}
+          initialTab="location"
+          onClose={() => setEditingPump(null)}
+          onSaved={async (createdBlock) => {
+            if (createdBlock) {
+              await refreshMaster();
+            }
+            await loadData();
+            setNotice(`Lokasi dan info operasional ${editingPump.pumpCode} diperbarui.`);
+          }}
+        />
+      )}
     </AppShell>
   );
 }

@@ -271,8 +271,9 @@ export default function DashboardPage() {
                             {pump.pumpCode}
                           </p>
                           <p className="mt-0.5 text-xs text-field-muted">
-                            {pump.estateCode} / Blok {pump.blockCode} • {pump.pumpTypeName} •{" "}
-                            {pump.engineBrandName}
+                            {pump.estateCode ?? "-"} /{" "}
+                            {pump.blockCode ? `Blok ${pump.blockCode}` : "Belum Assign Lokasi"} •{" "}
+                            {pump.pumpTypeName} • {pump.engineBrandName}
                           </p>
                         </div>
                         <UnitStatusBadge status={pump.currentUnitStatus} />
