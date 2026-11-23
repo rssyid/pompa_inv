@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useAppData } from "./AppDataProvider";
 import {
   BarChart3,
   ChevronLeft,
@@ -59,6 +60,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { clearSession } = useAppData();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -73,6 +75,7 @@ export function AppShell({
   async function handleLogout() {
     setLoggingOut(true);
     await fetch("/api/auth/logout", { method: "POST" });
+    clearSession();
     router.push("/login");
     router.refresh();
   }

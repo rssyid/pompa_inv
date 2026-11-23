@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { estates } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import { MASTER_TREE_TAG } from "@/lib/queries/master";
 
 const createSchema = z.object({
   regionId: z.number().int().positive(),
@@ -39,6 +41,7 @@ export async function POST(request: NextRequest) {
         name: parsed.data.name.trim(),
       })
       .returning();
+    revalidateTag(MASTER_TREE_TAG);
     return NextResponse.json({ item: created }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Kode Estate sudah ada pada Region ini." }, { status: 409 });
@@ -69,6 +72,7 @@ export async function PATCH(request: NextRequest) {
       .where(eq(estates.id, parsed.data.id))
       .returning();
     if (!updated) return NextResponse.json({ error: "Estate tidak ditemukan." }, { status: 404 });
+    revalidateTag(MASTER_TREE_TAG);
     return NextResponse.json({ item: updated });
   } catch {
     return NextResponse.json({ error: "Kode Estate bentrok pada Region yang dipilih." }, { status: 409 });

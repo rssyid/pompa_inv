@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { pumpTypes } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import { MASTER_TREE_TAG } from "@/lib/queries/master";
 
 const createSchema = z.object({
   code: z.string().min(2).max(40),
@@ -39,6 +41,7 @@ export async function POST(request: NextRequest) {
         description: parsed.data.description?.trim() || null,
       })
       .returning();
+    revalidateTag(MASTER_TREE_TAG);
     return NextResponse.json({ item: created }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Kode Jenis Pompa sudah terdaftar." }, { status: 409 });
@@ -68,5 +71,6 @@ export async function PATCH(request: NextRequest) {
     .returning();
 
   if (!updated) return NextResponse.json({ error: "Jenis Pompa tidak ditemukan." }, { status: 404 });
+  revalidateTag(MASTER_TREE_TAG);
   return NextResponse.json({ item: updated });
 }

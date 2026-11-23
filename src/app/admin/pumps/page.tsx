@@ -1,15 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
-import { MasterTreeData } from "@/components/HierarchyFilterBar";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { ErrorState, LoadingState } from "@/components/UiStates";
 import { EnrichedPump, fetchJson } from "@/lib/client-fetch";
 
 export default function AdminPumpsPage() {
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
-  const [master, setMaster] = useState<MasterTreeData | null>(null);
+  const { user, master, ensureLoaded, error: bootError } = useAppData();
   const [pumps, setPumps] = useState<EnrichedPump[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -29,41 +28,41 @@ export default function AdminPumpsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, masterRes, pumpsRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
-        fetchJson<MasterTreeData>("/api/master/tree"),
+      const [boot, pumpsRes] = await Promise.all([
+        ensureLoaded(),
         fetchJson<{ pumps: EnrichedPump[] }>("/api/pumps?includeInactive=true"),
       ]);
-      setUser(meRes.user);
-      setMaster(masterRes);
       setPumps(pumpsRes.pumps);
 
-      if (!companyId && masterRes.companies[0]) {
-        const cId = String(masterRes.companies[0].id);
-        setCompanyId(cId);
-        const firstReg = masterRes.regions.find((r) => String(r.companyId) === cId);
-        if (firstReg) {
-          setRegionId(String(firstReg.id));
-          const firstEst = masterRes.estates.find((e) => e.regionId === firstReg.id);
-          if (firstEst) {
-            setEstateId(String(firstEst.id));
-            const firstBlk = masterRes.blocks.find((b) => b.estateId === firstEst.id);
-            if (firstBlk) setBlockId(String(firstBlk.id));
+      const masterRes = boot?.master;
+      if (masterRes) {
+        if (!companyId && masterRes.companies[0]) {
+          const cId = String(masterRes.companies[0].id);
+          setCompanyId(cId);
+          const firstReg = masterRes.regions.find((r) => String(r.companyId) === cId);
+          if (firstReg) {
+            setRegionId(String(firstReg.id));
+            const firstEst = masterRes.estates.find((e) => e.regionId === firstReg.id);
+            if (firstEst) {
+              setEstateId(String(firstEst.id));
+              const firstBlk = masterRes.blocks.find((b) => b.estateId === firstEst.id);
+              if (firstBlk) setBlockId(String(firstBlk.id));
+            }
           }
         }
-      }
-      if (!pumpTypeId && masterRes.pumpTypes[0]) {
-        setPumpTypeId(String(masterRes.pumpTypes[0].id));
-      }
-      if (!engineBrandId && masterRes.engineBrands[0]) {
-        setEngineBrandId(String(masterRes.engineBrands[0].id));
+        if (!pumpTypeId && masterRes.pumpTypes[0]) {
+          setPumpTypeId(String(masterRes.pumpTypes[0].id));
+        }
+        if (!engineBrandId && masterRes.engineBrands[0]) {
+          setEngineBrandId(String(masterRes.engineBrands[0].id));
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat data master pompa.");
     } finally {
       setLoading(false);
     }
-  }, [companyId, engineBrandId, pumpTypeId]);
+  }, [companyId, engineBrandId, ensureLoaded, pumpTypeId]);
 
   useEffect(() => {
     loadData();
@@ -111,10 +110,22 @@ export default function AdminPumpsPage() {
     }
   }
 
-  if (loading || !user || !master) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Memuat kelola unit pompa..." />
+      </div>
+    );
+  }
+
+  if (!user || !master) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat kelola unit pompa"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadData}
+        />
       </div>
     );
   }

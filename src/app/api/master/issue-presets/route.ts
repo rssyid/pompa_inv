@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { issuePresets } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import { MASTER_TREE_TAG } from "@/lib/queries/master";
 
 const createSchema = z.object({
   label: z.string().min(2).max(80),
@@ -42,6 +44,7 @@ export async function POST(request: NextRequest) {
         sortOrder: parsed.data.sortOrder,
       })
       .returning();
+    revalidateTag(MASTER_TREE_TAG);
     return NextResponse.json({ item: created }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Temuan Standar sudah terdaftar." }, { status: 409 });
@@ -74,5 +77,6 @@ export async function PATCH(request: NextRequest) {
     .where(eq(issuePresets.id, parsed.data.id))
     .returning();
   if (!updated) return NextResponse.json({ error: "Temuan Standar tidak ditemukan." }, { status: 404 });
+  revalidateTag(MASTER_TREE_TAG);
   return NextResponse.json({ item: updated });
 }

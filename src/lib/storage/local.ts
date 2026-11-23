@@ -45,12 +45,12 @@ export const localStorageProvider: PhotoStorageProvider = {
     };
   },
 
-  async read(storageKey: string): Promise<PhotoStreamResult> {
+  async read(storageKey: string, knownMimeType?: string): Promise<PhotoStreamResult> {
     const targetPath = resolveSafePath(storageKey);
     const buffer = await fs.readFile(targetPath);
     return {
       buffer,
-      mimeType: guessMime(targetPath),
+      mimeType: knownMimeType ?? guessMime(targetPath),
     };
   },
 

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { pumpTypeParts } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import { MASTER_TREE_TAG } from "@/lib/queries/master";
 
 const createPartSchema = z.object({
   sectionCode: z.string().min(1).max(10),
@@ -58,6 +60,7 @@ export async function POST(
     })
     .returning();
 
+  revalidateTag(MASTER_TREE_TAG);
   return NextResponse.json({ item: created }, { status: 201 });
 }
 
@@ -90,5 +93,6 @@ export async function PATCH(request: NextRequest) {
     .returning();
 
   if (!updated) return NextResponse.json({ error: "Komponen tidak ditemukan." }, { status: 404 });
+  revalidateTag(MASTER_TREE_TAG);
   return NextResponse.json({ item: updated });
 }

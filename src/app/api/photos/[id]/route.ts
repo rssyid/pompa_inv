@@ -6,7 +6,7 @@ import { requireApiSession } from "@/lib/auth";
 import { getStorageProvider } from "@/lib/storage";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireApiSession();
@@ -29,17 +29,29 @@ export async function GET(
     return NextResponse.json({ error: "Foto tidak ditemukan." }, { status: 404 });
   }
 
+  const etag = `"photo-${photo.id}-${photo.storageKey}"`;
+  if (request.headers.get("if-none-match") === etag) {
+    return new NextResponse(null, {
+      status: 304,
+      headers: {
+        ETag: etag,
+        "Cache-Control": "private, max-age=604800, immutable",
+      },
+    });
+  }
+
   try {
     const provider = getStorageProvider(
       photo.storageProvider === "local" ? "local" : "gdrive"
     );
-    const { buffer, mimeType } = await provider.read(photo.storageKey);
+    const { buffer, mimeType } = await provider.read(photo.storageKey, photo.mimeType);
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Content-Type": photo.mimeType || mimeType,
-        "Cache-Control": "private, max-age=86400",
+        ETag: etag,
+        "Cache-Control": "private, max-age=604800, immutable",
       },
     });
   } catch (err) {

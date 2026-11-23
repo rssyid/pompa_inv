@@ -4,11 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Camera, Check, Trash2 } from "lucide-react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import {
   MasterIssuePreset,
   MasterPumpTypePart,
-  MasterTreeData,
 } from "@/components/HierarchyFilterBar";
 import { ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
@@ -62,7 +62,7 @@ interface UploadedPhotoState {
 export default function InspectPumpPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
+  const { user, ensureLoaded, error: bootError } = useAppData();
   const [pump, setPump] = useState<PumpInfo | null>(null);
   const [presets, setPresets] = useState<MasterIssuePreset[]>([]);
   const [lastItems, setLastItems] = useState<PreviousInspectionItem[]>([]);
@@ -84,9 +84,8 @@ export default function InspectPumpPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, masterRes, detailRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
-        fetchJson<MasterTreeData>("/api/master/tree"),
+      const [boot, detailRes] = await Promise.all([
+        ensureLoaded(),
         fetchJson<{
           pump: PumpInfo;
           templateParts: MasterPumpTypePart[];
@@ -97,11 +96,11 @@ export default function InspectPumpPage() {
         }>(`/api/pumps/${params.id}`),
       ]);
 
-      setUser(meRes.user);
+      const issuePresets = boot?.master.issuePresets ?? [];
       setPump(detailRes.pump);
-      setPresets(masterRes.issuePresets);
+      setPresets(issuePresets);
 
-      const normalPreset = masterRes.issuePresets.find(
+      const normalPreset = issuePresets.find(
         (p) => p.label.toLowerCase() === "normal / baik"
       );
 
@@ -130,7 +129,7 @@ export default function InspectPumpPage() {
     } finally {
       setLoading(false);
     }
-  }, [params.id]);
+  }, [ensureLoaded, params.id]);
 
   useEffect(() => {
     loadData();
@@ -200,35 +199,43 @@ export default function InspectPumpPage() {
     setUploadingPhoto(true);
     setError(null);
     try {
-      let seq = photos.length;
-      for (const rawFile of Array.from(files)) {
-        seq += 1;
-        const compressed = await compressImageFile(rawFile);
-        const fd = new FormData();
-        fd.append("file", compressed);
-        fd.append("pumpId", String(pump.id));
-        fd.append("inspectedAt", inspectedAt);
-        fd.append("sequence", String(seq));
+      const fileList = Array.from(files);
+      const baseSeq = photos.length;
+      const uploadedBatch: UploadedPhotoState[] = [];
+      const concurrency = 3;
 
-        const res = await fetch("/api/photos/upload", {
-          method: "POST",
-          body: fd,
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || "Gagal mengunggah foto.");
-        }
+      for (let start = 0; start < fileList.length; start += concurrency) {
+        const slice = fileList.slice(start, start + concurrency);
+        const results = await Promise.all(
+          slice.map(async (rawFile, offset) => {
+            const seq = baseSeq + start + offset + 1;
+            const compressed = await compressImageFile(rawFile);
+            const fd = new FormData();
+            fd.append("file", compressed);
+            fd.append("pumpId", String(pump.id));
+            fd.append("inspectedAt", inspectedAt);
+            fd.append("sequence", String(seq));
 
-        const previewUrl = URL.createObjectURL(compressed);
-        setPhotos((prev) => [
-          ...prev,
-          {
-            ...data.photo,
-            caption: "",
-            previewUrl,
-          },
-        ]);
+            const res = await fetch("/api/photos/upload", {
+              method: "POST",
+              body: fd,
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || "Gagal mengunggah foto.");
+            }
+
+            return {
+              ...data.photo,
+              caption: "",
+              previewUrl: URL.createObjectURL(compressed),
+            } as UploadedPhotoState;
+          })
+        );
+        uploadedBatch.push(...results);
       }
+
+      setPhotos((prev) => [...prev, ...uploadedBatch]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal mengunggah foto.");
     } finally {
@@ -275,10 +282,22 @@ export default function InspectPumpPage() {
     }
   }
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Menyiapkan formulir pemeriksaan..." />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat formulir pemeriksaan"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadData}
+        />
       </div>
     );
   }

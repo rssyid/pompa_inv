@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
+import { AppDataProvider } from "@/components/AppDataProvider";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -36,7 +37,7 @@ export default function RootLayout({
         <a href="#main-content" className="skip-link no-print">
           Lewati ke konten utama
         </a>
-        {children}
+        <AppDataProvider>{children}</AppDataProvider>
       </body>
     </html>
   );

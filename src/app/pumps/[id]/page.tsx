@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, ClipboardCheck, Download, Printer, X } from "lucide-react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import {
   AvailabilityLabel,
   ConditionLabel,
@@ -57,7 +58,7 @@ interface InspectionRecord {
 
 export default function PumpDetailPage() {
   const params = useParams<{ id: string }>();
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
+  const { user, ensureLoaded, error: bootError } = useAppData();
   const [pump, setPump] = useState<PumpDetail | null>(null);
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
   const [selectedInspectionId, setSelectedInspectionId] = useState<number | null>(null);
@@ -69,13 +70,12 @@ export default function PumpDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, detailRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
+      const [, detailRes] = await Promise.all([
+        ensureLoaded(),
         fetchJson<{ pump: PumpDetail; inspections: InspectionRecord[] }>(
           `/api/pumps/${params.id}`
         ),
       ]);
-      setUser(meRes.user);
       setPump(detailRes.pump);
       setInspections(detailRes.inspections);
       if (detailRes.inspections.length > 0) {
@@ -86,16 +86,28 @@ export default function PumpDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [params.id]);
+  }, [ensureLoaded, params.id]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Memuat detail unit pompa..." />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat detail pompa"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadData}
+        />
       </div>
     );
   }

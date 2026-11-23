@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Upload } from "lucide-react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { ErrorState, LoadingState } from "@/components/UiStates";
-import { fetchJson } from "@/lib/client-fetch";
 
 interface PreviewRow {
   pumpCode: string;
@@ -20,7 +20,7 @@ interface PreviewRow {
 }
 
 export default function AdminImportPage() {
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
+  const { user, ensureLoaded, refreshMaster, error: bootError } = useAppData();
   const [file, setFile] = useState<File | null>(null);
   const [defaultEstateCode, setDefaultEstateCode] = useState("");
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
@@ -32,14 +32,13 @@ export default function AdminImportPage() {
   const loadMe = useCallback(async () => {
     setLoading(true);
     try {
-      const me = await fetchJson<{ user: ClientSessionUser }>("/api/auth/me");
-      setUser(me.user);
+      await ensureLoaded();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat sesi.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ensureLoaded]);
 
   useEffect(() => {
     loadMe();
@@ -76,6 +75,7 @@ export default function AdminImportPage() {
         setResultMsg(
           `Import selesai: ${s.pumpsCreated} pompa baru, ${s.inspectionsCreated} pemeriksaan, ${s.photosUploaded} foto diunggah.`
         );
+        await refreshMaster();
         setPreview(null);
         setFile(null);
       }
@@ -86,10 +86,22 @@ export default function AdminImportPage() {
     }
   }
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Memuat halaman import Excel..." />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat halaman import"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadMe}
+        />
       </div>
     );
   }

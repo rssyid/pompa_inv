@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Printer } from "lucide-react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import {
   FilterValues,
   HierarchyFilterBar,
-  MasterTreeData,
 } from "@/components/HierarchyFilterBar";
 import {
   AvailabilityLabel,
@@ -47,12 +47,12 @@ interface ReportResponse {
 }
 
 export default function ReportsPage() {
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
-  const [master, setMaster] = useState<MasterTreeData | null>(null);
+  const { user, master, ensureLoaded, error: bootError } = useAppData();
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [activeTab, setActiveTab] = useState<"units" | "issues">("units");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
   const [filters, setFilters] = useState<FilterValues>({
     companyId: "",
     regionId: "",
@@ -84,8 +84,14 @@ export default function ReportsPage() {
 
   const loadReport = useCallback(
     async (f: FilterValues, dFrom: string, dTo: string) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       const qs = buildQueryString(f, dFrom, dTo);
-      const res = await fetchJson<ReportResponse>(`/api/reports/summary?${qs}`);
+      const res = await fetchJson<ReportResponse>(`/api/reports/summary?${qs}`, {
+        signal: controller.signal,
+      });
       setReport(res);
     },
     [buildQueryString]
@@ -95,19 +101,14 @@ export default function ReportsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, masterRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
-        fetchJson<MasterTreeData>("/api/master/tree"),
-      ]);
-      setUser(meRes.user);
-      setMaster(masterRes);
-      await loadReport(filters, dateFrom, dateTo);
+      await Promise.all([ensureLoaded(), loadReport(filters, dateFrom, dateTo)]);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal memuat laporan.");
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, filters, loadReport]);
+  }, [dateFrom, dateTo, ensureLoaded, filters, loadReport]);
 
   useEffect(() => {
     loadInitial();
@@ -119,14 +120,27 @@ export default function ReportsPage() {
     try {
       await loadReport(nextF, nextFrom, nextTo);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal memperbarui laporan.");
     }
   }
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Memuat pusat laporan..." />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat laporan"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadInitial}
+        />
       </div>
     );
   }

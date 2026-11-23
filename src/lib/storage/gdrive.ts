@@ -3,8 +3,11 @@ import { Readable } from "node:stream";
 import { PhotoStorageProvider, PhotoStreamResult, UploadPhotoInput, UploadPhotoResult } from "./types";
 
 const folderCache = new Map<string, Promise<string>>();
+let cachedDriveClient: drive_v3.Drive | null = null;
 
 function getDriveClient(): drive_v3.Drive {
+  if (cachedDriveClient) return cachedDriveClient;
+
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
@@ -18,7 +21,8 @@ function getDriveClient(): drive_v3.Drive {
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
   oauth2Client.setCredentials({ refresh_token: refreshToken });
 
-  return google.drive({ version: "v3", auth: oauth2Client });
+  cachedDriveClient = google.drive({ version: "v3", auth: oauth2Client });
+  return cachedDriveClient;
 }
 
 function escapeDriveQueryValue(val: string): string {
@@ -122,12 +126,18 @@ export const gdriveStorageProvider: PhotoStorageProvider = {
     };
   },
 
-  async read(storageKey: string): Promise<PhotoStreamResult> {
+  async read(storageKey: string, knownMimeType?: string): Promise<PhotoStreamResult> {
     const drive = getDriveClient();
-    const meta = await drive.files.get({
-      fileId: storageKey,
-      fields: "mimeType",
-    });
+    // Skip extra metadata call when mimeType is already stored in Neon DB.
+    const mimeType =
+      knownMimeType ??
+      (
+        await drive.files.get({
+          fileId: storageKey,
+          fields: "mimeType",
+        })
+      ).data.mimeType ??
+      "image/jpeg";
 
     const media = await drive.files.get(
       { fileId: storageKey, alt: "media" },
@@ -136,7 +146,7 @@ export const gdriveStorageProvider: PhotoStorageProvider = {
 
     return {
       buffer: Buffer.from(media.data as ArrayBuffer),
-      mimeType: meta.data.mimeType ?? "image/jpeg",
+      mimeType,
     };
   },
 

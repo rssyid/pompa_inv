@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, ClipboardCheck } from "lucide-react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import {
   FilterValues,
   HierarchyFilterBar,
-  MasterTreeData,
 } from "@/components/HierarchyFilterBar";
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
@@ -35,11 +35,11 @@ interface ReportSummaryResponse {
 }
 
 export default function DashboardPage() {
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
-  const [master, setMaster] = useState<MasterTreeData | null>(null);
+  const { user, master, ensureLoaded, error: bootError } = useAppData();
   const [summary, setSummary] = useState<ReportSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [filters, setFilters] = useState<FilterValues>({
     companyId: "",
     regionId: "",
@@ -51,6 +51,10 @@ export default function DashboardPage() {
   });
 
   const loadSummary = useCallback(async (f: FilterValues) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     const params = new URLSearchParams();
     if (f.companyId) params.set("companyId", f.companyId);
     if (f.regionId) params.set("regionId", f.regionId);
@@ -61,7 +65,8 @@ export default function DashboardPage() {
     if (f.search) params.set("search", f.search);
 
     const data = await fetchJson<ReportSummaryResponse>(
-      `/api/reports/summary?${params.toString()}`
+      `/api/reports/summary?${params.toString()}`,
+      { signal: controller.signal }
     );
     setSummary(data);
   }, []);
@@ -70,19 +75,14 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, masterRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
-        fetchJson<MasterTreeData>("/api/master/tree"),
-      ]);
-      setUser(meRes.user);
-      setMaster(masterRes);
-      await loadSummary(filters);
+      await Promise.all([ensureLoaded(), loadSummary(filters)]);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal memuat ringkasan pompa.");
     } finally {
       setLoading(false);
     }
-  }, [filters, loadSummary]);
+  }, [ensureLoaded, filters, loadSummary]);
 
   useEffect(() => {
     loadInitial();
@@ -95,6 +95,7 @@ export default function DashboardPage() {
     try {
       await loadSummary(next);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal menyaring data.");
     }
   }
@@ -112,7 +113,7 @@ export default function DashboardPage() {
       <div className="min-h-screen bg-field-bg p-6">
         <ErrorState
           title="Gagal memuat ringkasan pompa"
-          message={error || "Terjadi gangguan koneksi ke server."}
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
           onRetry={loadInitial}
         />
       </div>

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
-import { MasterTreeData } from "@/components/HierarchyFilterBar";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import { ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
 
@@ -17,8 +17,7 @@ interface UserRow {
 }
 
 export default function AdminUsersPage() {
-  const [me, setMe] = useState<ClientSessionUser | null>(null);
-  const [master, setMaster] = useState<MasterTreeData | null>(null);
+  const { user: me, master, ensureLoaded, error: bootError } = useAppData();
   const [usersList, setUsersList] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -38,20 +37,17 @@ export default function AdminUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, treeRes, usersRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
-        fetchJson<MasterTreeData>("/api/master/tree"),
+      const [, usersRes] = await Promise.all([
+        ensureLoaded(),
         fetchJson<{ users: UserRow[] }>("/api/users"),
       ]);
-      setMe(meRes.user);
-      setMaster(treeRes);
       setUsersList(usersRes.users);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat data user.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ensureLoaded]);
 
   useEffect(() => {
     loadData();
@@ -103,10 +99,22 @@ export default function AdminUsersPage() {
     }
   }
 
-  if (loading || !me || !master) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Memuat manajemen user..." />
+      </div>
+    );
+  }
+
+  if (!me || !master) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat manajemen user"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadData}
+        />
       </div>
     );
   }

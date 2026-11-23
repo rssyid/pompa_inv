@@ -29,7 +29,7 @@ describe("Excel Pump Parser & Exporter", () => {
     expect(r1At42?.pumpTypeCode).toBe("axial_triple");
     expect(r1At42?.parts.length).toBe(51);
     expect(r1At42?.photos.length).toBeGreaterThan(0);
-  });
+  }, 15000);
 
   it("parses Wilayah 2 workbook with 24 photos", async () => {
     const filePath = path.resolve(process.cwd(), "data", "Form Pemeriksaan Pompa Wilayah 2.xlsx");

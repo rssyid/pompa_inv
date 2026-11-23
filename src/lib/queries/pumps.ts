@@ -1,18 +1,6 @@
-import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import {
-  blocks,
-  companies,
-  engineBrands,
-  estates,
-  inspectionItems,
-  inspectionPhotos,
-  inspections,
-  issuePresets,
-  pumps,
-  pumpTypes,
-  regions,
-} from "@/db/schema";
+import { inspectionItems, issuePresets } from "@/db/schema";
 
 export interface PumpFilterParams {
   companyId?: number;
@@ -58,134 +46,108 @@ export interface EnrichedPumpRow {
 export async function queryFilteredPumps(filters: PumpFilterParams): Promise<EnrichedPumpRow[]> {
   const db = getDb();
 
-  const conditions = [];
+  const whereClauses = [];
   if (!filters.includeInactive) {
-    conditions.push(eq(pumps.isActive, true));
+    whereClauses.push(sql`p.is_active = true`);
   }
-  if (filters.companyId) conditions.push(eq(companies.id, filters.companyId));
-  if (filters.regionId) conditions.push(eq(regions.id, filters.regionId));
-  if (filters.estateId) conditions.push(eq(estates.id, filters.estateId));
-  if (filters.blockId) conditions.push(eq(blocks.id, filters.blockId));
-  if (filters.pumpTypeId) conditions.push(eq(pumpTypes.id, filters.pumpTypeId));
+  if (filters.companyId) whereClauses.push(sql`c.id = ${filters.companyId}`);
+  if (filters.regionId) whereClauses.push(sql`r.id = ${filters.regionId}`);
+  if (filters.estateId) whereClauses.push(sql`e.id = ${filters.estateId}`);
+  if (filters.blockId) whereClauses.push(sql`b.id = ${filters.blockId}`);
+  if (filters.pumpTypeId) whereClauses.push(sql`pt.id = ${filters.pumpTypeId}`);
   if (filters.status && ["aktif", "perlu_perbaikan", "rusak_total"].includes(filters.status)) {
-    conditions.push(eq(pumps.currentUnitStatus, filters.status));
+    whereClauses.push(sql`p.current_unit_status = ${filters.status}`);
   }
   if (filters.search?.trim()) {
     const q = `%${filters.search.trim()}%`;
-    conditions.push(or(ilike(pumps.pumpCode, q), ilike(blocks.code, q), ilike(estates.code, q)));
+    whereClauses.push(sql`(p.pump_code ILIKE ${q} OR b.code ILIKE ${q} OR e.code ILIKE ${q})`);
   }
 
-  const rows = await db
-    .select({
-      id: pumps.id,
-      pumpCode: pumps.pumpCode,
-      currentUnitStatus: pumps.currentUnitStatus,
-      lastInspectedAt: pumps.lastInspectedAt,
-      isActive: pumps.isActive,
-      blockId: blocks.id,
-      blockCode: blocks.code,
-      blockName: blocks.name,
-      estateId: estates.id,
-      estateCode: estates.code,
-      estateName: estates.name,
-      regionId: regions.id,
-      regionCode: regions.code,
-      regionName: regions.name,
-      companyId: companies.id,
-      companyCode: companies.code,
-      companyName: companies.name,
-      pumpTypeId: pumpTypes.id,
-      pumpTypeCode: pumpTypes.code,
-      pumpTypeName: pumpTypes.name,
-      engineBrandId: engineBrands.id,
-      engineBrandName: engineBrands.name,
-    })
-    .from(pumps)
-    .innerJoin(blocks, eq(pumps.blockId, blocks.id))
-    .innerJoin(estates, eq(blocks.estateId, estates.id))
-    .innerJoin(regions, eq(estates.regionId, regions.id))
-    .innerJoin(companies, eq(regions.companyId, companies.id))
-    .innerJoin(pumpTypes, eq(pumps.pumpTypeId, pumpTypes.id))
-    .innerJoin(engineBrands, eq(pumps.engineBrandId, engineBrands.id))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(asc(estates.code), asc(pumps.pumpCode));
+  const whereSql =
+    whereClauses.length > 0
+      ? sql`WHERE ${sql.join(whereClauses, sql` AND `)}`
+      : sql``;
 
-  if (rows.length === 0) return [];
+  const result = await db.execute(sql`
+    WITH filtered_pumps AS (
+      SELECT
+        p.id,
+        p.pump_code AS "pumpCode",
+        p.current_unit_status AS "currentUnitStatus",
+        p.last_inspected_at AS "lastInspectedAt",
+        p.is_active AS "isActive",
+        b.id AS "blockId",
+        b.code AS "blockCode",
+        b.name AS "blockName",
+        e.id AS "estateId",
+        e.code AS "estateCode",
+        e.name AS "estateName",
+        r.id AS "regionId",
+        r.code AS "regionCode",
+        r.name AS "regionName",
+        c.id AS "companyId",
+        c.code AS "companyCode",
+        c.name AS "companyName",
+        pt.id AS "pumpTypeId",
+        pt.code AS "pumpTypeCode",
+        pt.name AS "pumpTypeName",
+        eb.id AS "engineBrandId",
+        eb.name AS "engineBrandName"
+      FROM pumps p
+      INNER JOIN blocks b ON p.block_id = b.id
+      INNER JOIN estates e ON b.estate_id = e.id
+      INNER JOIN regions r ON e.region_id = r.id
+      INNER JOIN companies c ON r.company_id = c.id
+      INNER JOIN pump_types pt ON p.pump_type_id = pt.id
+      INNER JOIN engine_brands eb ON p.engine_brand_id = eb.id
+      ${whereSql}
+    ),
+    latest_inspections AS (
+      SELECT DISTINCT ON (i.pump_id)
+        i.id,
+        i.pump_id,
+        i.inspected_at::text AS "inspectedAt",
+        i.inspector_name AS "inspectorName"
+      FROM inspections i
+      INNER JOIN filtered_pumps fp ON fp.id = i.pump_id
+      ORDER BY i.pump_id, i.inspected_at DESC, i.id DESC
+    ),
+    issue_counts AS (
+      SELECT
+        ii.inspection_id,
+        COUNT(*)::int AS "issueCount"
+      FROM inspection_items ii
+      INNER JOIN latest_inspections li ON li.id = ii.inspection_id
+      WHERE ii.availability <> 'ada' OR ii.condition = 'rusak'
+      GROUP BY ii.inspection_id
+    ),
+    photo_counts AS (
+      SELECT
+        ip.inspection_id,
+        COUNT(*)::int AS "photoCount"
+      FROM inspection_photos ip
+      INNER JOIN latest_inspections li ON li.id = ip.inspection_id
+      GROUP BY ip.inspection_id
+    )
+    SELECT
+      fp.*,
+      li.id AS "latestInspectionId",
+      li."inspectedAt" AS "latestInspectedDate",
+      li."inspectorName" AS "latestInspectorName",
+      COALESCE(ic."issueCount", 0)::int AS "issueCount",
+      COALESCE(pc."photoCount", 0)::int AS "photoCount"
+    FROM filtered_pumps fp
+    LEFT JOIN latest_inspections li ON li.pump_id = fp.id
+    LEFT JOIN issue_counts ic ON ic.inspection_id = li.id
+    LEFT JOIN photo_counts pc ON pc.inspection_id = li.id
+    ORDER BY fp."estateCode" ASC, fp."pumpCode" ASC
+  `);
 
-  const pumpIds = rows.map((r) => r.id);
-  const allInspections = await db
-    .select({
-      id: inspections.id,
-      pumpId: inspections.pumpId,
-      inspectedAt: inspections.inspectedAt,
-      inspectorName: inspections.inspectorName,
-    })
-    .from(inspections)
-    .where(inArray(inspections.pumpId, pumpIds))
-    .orderBy(desc(inspections.inspectedAt), desc(inspections.id));
-
-  const latestByPump = new Map<
-    number,
-    { id: number; inspectedAt: string; inspectorName: string }
-  >();
-  for (const ins of allInspections) {
-    if (!latestByPump.has(ins.pumpId)) {
-      latestByPump.set(ins.pumpId, {
-        id: ins.id,
-        inspectedAt: ins.inspectedAt,
-        inspectorName: ins.inspectorName,
-      });
-    }
-  }
-
-  const latestIds = Array.from(latestByPump.values()).map((v) => v.id);
-  const issueCountMap = new Map<number, number>();
-  const photoCountMap = new Map<number, number>();
-
-  if (latestIds.length > 0) {
-    const issueCounts = await db
-      .select({
-        inspectionId: inspectionItems.inspectionId,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(inspectionItems)
-      .where(
-        and(
-          inArray(inspectionItems.inspectionId, latestIds),
-          sql`(${inspectionItems.availability} != 'ada' OR ${inspectionItems.condition} = 'rusak')`
-        )
-      )
-      .groupBy(inspectionItems.inspectionId);
-
-    for (const ic of issueCounts) {
-      issueCountMap.set(ic.inspectionId, ic.count);
-    }
-
-    const photoCounts = await db
-      .select({
-        inspectionId: inspectionPhotos.inspectionId,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(inspectionPhotos)
-      .where(inArray(inspectionPhotos.inspectionId, latestIds))
-      .groupBy(inspectionPhotos.inspectionId);
-
-    for (const pc of photoCounts) {
-      photoCountMap.set(pc.inspectionId, pc.count);
-    }
-  }
-
-  return rows.map((row) => {
-    const latest = latestByPump.get(row.id);
-    return {
-      ...row,
-      latestInspectionId: latest?.id ?? null,
-      latestInspectedDate: latest?.inspectedAt ?? null,
-      latestInspectorName: latest?.inspectorName ?? null,
-      issueCount: latest ? issueCountMap.get(latest.id) ?? 0 : 0,
-      photoCount: latest ? photoCountMap.get(latest.id) ?? 0 : 0,
-    };
-  });
+  return (result.rows as unknown as EnrichedPumpRow[]).map((row) => ({
+    ...row,
+    issueCount: Number(row.issueCount ?? 0),
+    photoCount: Number(row.photoCount ?? 0),
+  }));
 }
 
 export async function queryLatestIssuesForPumps(

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import { MasterTreeData } from "@/components/HierarchyFilterBar";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
@@ -16,7 +17,7 @@ type MasterTab =
   | "preset";
 
 export default function AdminMasterPage() {
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
+  const { user, ensureLoaded, refreshMaster, error: bootError } = useAppData();
   const [master, setMaster] = useState<MasterTreeData | null>(null);
   const [tab, setTab] = useState<MasterTab>("pt");
   const [loading, setLoading] = useState(true);
@@ -59,11 +60,10 @@ export default function AdminMasterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, treeRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
+      const [, treeRes] = await Promise.all([
+        ensureLoaded(),
         fetchJson<MasterTreeData>("/api/master/tree?includeInactive=true"),
       ]);
-      setUser(meRes.user);
       setMaster(treeRes);
 
       if (!regCompanyId && treeRes.companies[0]) {
@@ -83,7 +83,7 @@ export default function AdminMasterPage() {
     } finally {
       setLoading(false);
     }
-  }, [blkEstateId, estRegionId, regCompanyId, selectedPumpTypeId]);
+  }, [blkEstateId, ensureLoaded, estRegionId, regCompanyId, selectedPumpTypeId]);
 
   useEffect(() => {
     loadData();
@@ -100,7 +100,7 @@ export default function AdminMasterPage() {
         body: JSON.stringify(payload),
       });
       setNotice(successMsg);
-      await loadData();
+      await Promise.all([loadData(), refreshMaster()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal menyimpan perubahan.");
     } finally {
@@ -108,10 +108,22 @@ export default function AdminMasterPage() {
     }
   }
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-field-bg p-6">
         <LoadingState message="Memuat master data..." />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-field-bg p-6">
+        <ErrorState
+          title="Gagal memuat master data"
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
+          onRetry={loadData}
+        />
       </div>
     );
   }

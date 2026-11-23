@@ -1,24 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Camera, ClipboardCheck } from "lucide-react";
-import { AppShell, ClientSessionUser } from "@/components/AppShell";
+import { useAppData } from "@/components/AppDataProvider";
+import { AppShell } from "@/components/AppShell";
 import {
   FilterValues,
   HierarchyFilterBar,
-  MasterTreeData,
 } from "@/components/HierarchyFilterBar";
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { EnrichedPump, fetchJson } from "@/lib/client-fetch";
 
 export default function PumpsListPage() {
-  const [user, setUser] = useState<ClientSessionUser | null>(null);
-  const [master, setMaster] = useState<MasterTreeData | null>(null);
+  const { user, master, ensureLoaded, error: bootError } = useAppData();
   const [pumps, setPumps] = useState<EnrichedPump[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [filters, setFilters] = useState<FilterValues>({
     companyId: "",
     regionId: "",
@@ -30,6 +30,10 @@ export default function PumpsListPage() {
   });
 
   const loadPumps = useCallback(async (f: FilterValues) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     const params = new URLSearchParams();
     if (f.companyId) params.set("companyId", f.companyId);
     if (f.regionId) params.set("regionId", f.regionId);
@@ -40,7 +44,8 @@ export default function PumpsListPage() {
     if (f.search) params.set("search", f.search);
 
     const data = await fetchJson<{ pumps: EnrichedPump[] }>(
-      `/api/pumps?${params.toString()}`
+      `/api/pumps?${params.toString()}`,
+      { signal: controller.signal }
     );
     setPumps(data.pumps);
   }, []);
@@ -49,19 +54,14 @@ export default function PumpsListPage() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, masterRes] = await Promise.all([
-        fetchJson<{ user: ClientSessionUser }>("/api/auth/me"),
-        fetchJson<MasterTreeData>("/api/master/tree"),
-      ]);
-      setUser(meRes.user);
-      setMaster(masterRes);
-      await loadPumps(filters);
+      await Promise.all([ensureLoaded(), loadPumps(filters)]);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal memuat daftar pompa.");
     } finally {
       setLoading(false);
     }
-  }, [filters, loadPumps]);
+  }, [ensureLoaded, filters, loadPumps]);
 
   useEffect(() => {
     loadInitial();
@@ -73,6 +73,7 @@ export default function PumpsListPage() {
     try {
       await loadPumps(next);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Gagal menyaring daftar pompa.");
     }
   }
@@ -90,7 +91,7 @@ export default function PumpsListPage() {
       <div className="min-h-screen bg-field-bg p-6">
         <ErrorState
           title="Gagal memuat halaman daftar pompa"
-          message={error || "Terjadi gangguan koneksi ke server."}
+          message={error || bootError || "Terjadi gangguan koneksi ke server."}
           onRetry={loadInitial}
         />
       </div>

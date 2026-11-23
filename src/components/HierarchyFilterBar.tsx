@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+
 export interface MasterCompany {
   id: number;
   code: string;
@@ -93,6 +95,21 @@ export function HierarchyFilterBar({
   showSearch?: boolean;
   showStatus?: boolean;
 }) {
+  const [searchDraft, setSearchDraft] = useState(values.search);
+  const latestValuesRef = useRef(values);
+  latestValuesRef.current = values;
+
+  useEffect(() => {
+    setSearchDraft(values.search);
+  }, [values.search]);
+
+  useEffect(() => {
+    if (searchDraft === latestValuesRef.current.search) return;
+    const timer = setTimeout(() => {
+      onChange({ ...latestValuesRef.current, search: searchDraft });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchDraft, onChange]);
   const filteredRegions = values.companyId
     ? master.regions.filter((r) => String(r.companyId) === values.companyId)
     : master.regions;
@@ -123,6 +140,7 @@ export function HierarchyFilterBar({
   }
 
   function resetAll() {
+    setSearchDraft("");
     onChange({
       companyId: "",
       regionId: "",
@@ -280,8 +298,8 @@ export function HierarchyFilterBar({
             <input
               id="filter-search"
               type="search"
-              value={values.search}
-              onChange={(e) => updateField("search", e.target.value)}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
               placeholder="Contoh: R1-AD-17"
               className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
             />

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { requireApiSession } from "@/lib/auth";
 import { parsePumpWorkbook } from "@/lib/excel/parser";
 import { importParsedPumpRecords } from "@/lib/import-service";
+import { MASTER_TREE_TAG } from "@/lib/queries/master";
 
 export async function POST(request: NextRequest) {
   const auth = await requireApiSession("admin");
@@ -54,6 +56,7 @@ export async function POST(request: NextRequest) {
       skipExistingPumps: false,
     });
 
+    revalidateTag(MASTER_TREE_TAG);
     return NextResponse.json({ summary });
   } catch (err) {
     console.error("Excel import error:", err);

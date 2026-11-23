@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Eye, EyeOff, Lock, User } from "lucide-react";
+import { useAppData } from "@/components/AppDataProvider";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { refreshSession } = useAppData();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -32,6 +34,7 @@ export default function LoginPage() {
         setError(data.error || "Login gagal.");
         return;
       }
+      await refreshSession();
       router.push("/");
       router.refresh();
     } catch {
