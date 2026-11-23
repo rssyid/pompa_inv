@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ClipboardCheck, Download, Printer, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Download, Eye, Printer, X } from "lucide-react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
+import { PumpPrintReport } from "@/components/PumpPrintReport";
 import {
   AvailabilityLabel,
   ConditionLabel,
@@ -63,6 +64,7 @@ export default function PumpDetailPage() {
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
   const [selectedInspectionId, setSelectedInspectionId] = useState<number | null>(null);
   const [lightboxPhoto, setLightboxPhoto] = useState<InspectionPhotoRow | null>(null);
+  const [previewPrint, setPreviewPrint] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -129,7 +131,32 @@ export default function PumpDetailPage() {
       title={`Pompa ${pump.pumpCode}`}
       subtitle={`${pump.companyName} / ${pump.regionName} / ${pump.estateCode} / Blok ${pump.blockCode}`}
     >
-      <div className="space-y-5">
+      {previewPrint ? (
+        <div className="space-y-4">
+          <div className="no-print flex flex-wrap items-center justify-between gap-2 rounded-lg border border-field-border bg-field-surface p-3">
+            <button
+              type="button"
+              onClick={() => setPreviewPrint(false)}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-field-border bg-field-bg px-3 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              <span>Tutup Pratinjau</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover"
+            >
+              <Printer className="h-4 w-4" aria-hidden="true" />
+              <span>Cetak / Simpan PDF</span>
+            </button>
+          </div>
+          <div className="overflow-x-auto pb-4">
+            <PumpPrintReport pump={pump} inspection={activeInspection} forceShow />
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-5 print:hidden">
         {/* Action Bar */}
         <div className="no-print flex flex-wrap items-center justify-between gap-2">
           <Link
@@ -148,6 +175,14 @@ export default function PumpDetailPage() {
               <Download className="h-4 w-4" aria-hidden="true" />
               <span>Export Excel</span>
             </a>
+            <button
+              type="button"
+              onClick={() => setPreviewPrint(true)}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-field-border bg-field-surface px-3 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
+            >
+              <Eye className="h-4 w-4" aria-hidden="true" />
+              <span>Pratinjau A4</span>
+            </button>
             <button
               type="button"
               onClick={() => window.print()}
@@ -388,7 +423,10 @@ export default function PumpDetailPage() {
             </div>
           </div>
         )}
-      </div>
+        </div>
+      )}
+
+      {!previewPrint && <PumpPrintReport pump={pump} inspection={activeInspection} />}
     </AppShell>
   );
 }
