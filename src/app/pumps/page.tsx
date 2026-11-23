@@ -12,6 +12,7 @@ import {
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { EnrichedPump, fetchJson } from "@/lib/client-fetch";
+import { getPumpLocationBadgeInfo } from "@/lib/pump-location";
 
 export default function PumpsListPage() {
   const { user, master, ensureLoaded, error: bootError } = useAppData();
@@ -146,7 +147,7 @@ export default function PumpsListPage() {
                         {pump.pumpCode}
                       </p>
                       <p className="mt-0.5 text-xs font-medium text-field-muted">
-                        {pump.regionName}
+                        {pump.regionName ?? "Belum Ada Region"}
                       </p>
                     </div>
                     <UnitStatusBadge status={pump.currentUnitStatus} />
@@ -156,7 +157,13 @@ export default function PumpsListPage() {
                     <div>
                       <dt className="text-field-muted">Estate / Block</dt>
                       <dd className="font-mono font-semibold text-field-ink">
-                        {pump.estateCode} / {pump.blockCode}
+                        {
+                          getPumpLocationBadgeInfo({
+                            blockId: pump.blockId,
+                            blockCode: pump.blockCode,
+                            estateCode: pump.estateCode,
+                          }).label
+                        }
                       </dd>
                     </div>
                     <div>

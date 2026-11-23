@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   blocks,
@@ -15,7 +15,12 @@ import {
   regions,
 } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
-import { generateRecapWorkbook, generateSinglePumpWorkbook } from "@/lib/excel/exporter";
+import {
+  generateOperatingHoursWorkbook,
+  generateRecapWorkbook,
+  generateSinglePumpWorkbook,
+} from "@/lib/excel/exporter";
+import { queryOperatingHoursMonitoring } from "@/lib/queries/operating-hours";
 import { queryFilteredPumps, queryLatestIssuesForPumps } from "@/lib/queries/pumps";
 import { getStorageProvider } from "@/lib/storage";
 import { generatePumpReportDocx } from "@/lib/word/pump-report-docx";
@@ -35,10 +40,10 @@ async function loadSinglePumpExportData(pumpId: number, inspectionIdParam?: numb
       engineBrandName: engineBrands.name,
     })
     .from(pumps)
-    .innerJoin(blocks, eq(pumps.blockId, blocks.id))
-    .innerJoin(estates, eq(blocks.estateId, estates.id))
-    .innerJoin(regions, eq(estates.regionId, regions.id))
-    .innerJoin(companies, eq(regions.companyId, companies.id))
+    .leftJoin(blocks, eq(pumps.blockId, blocks.id))
+    .leftJoin(estates, sql`COALESCE(${blocks.estateId}, ${pumps.estateId}) = ${estates.id}`)
+    .leftJoin(regions, eq(estates.regionId, regions.id))
+    .leftJoin(companies, eq(regions.companyId, companies.id))
     .innerJoin(pumpTypes, eq(pumps.pumpTypeId, pumpTypes.id))
     .innerJoin(engineBrands, eq(pumps.engineBrandId, engineBrands.id))
     .where(eq(pumps.id, pumpId))
@@ -136,10 +141,10 @@ export async function GET(request: NextRequest) {
       ).filter((p): p is NonNullable<typeof p> => p !== null);
 
       const docBuffer = await generatePumpReportDocx({
-        companyName: pump.companyName,
-        regionName: pump.regionName,
-        estateCode: pump.estateCode,
-        blockCode: pump.blockCode,
+        companyName: pump.companyName ?? "PT TH Indoplantation",
+        regionName: pump.regionName ?? "-",
+        estateCode: pump.estateCode ?? "-",
+        blockCode: pump.blockCode ?? "Belum Assign",
         pumpCode: pump.pumpCode,
         pumpTypeName: pump.pumpTypeName,
         engineBrandName: pump.engineBrandName,
@@ -163,10 +168,10 @@ export async function GET(request: NextRequest) {
     }
 
     const buffer = await generateSinglePumpWorkbook({
-      companyName: pump.companyName,
-      regionName: pump.regionName,
-      estateCode: pump.estateCode,
-      blockCode: pump.blockCode,
+      companyName: pump.companyName ?? "PT TH Indoplantation",
+      regionName: pump.regionName ?? "-",
+      estateCode: pump.estateCode ?? "-",
+      blockCode: pump.blockCode ?? "Belum Assign",
       pumpCode: pump.pumpCode,
       pumpTypeName: pump.pumpTypeName,
       engineBrandName: pump.engineBrandName,
@@ -183,6 +188,32 @@ export async function GET(request: NextRequest) {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="Form_${pump.pumpCode}.xlsx"`,
+      },
+    });
+  }
+
+  if (exportType === "operating-hours") {
+    const report = await queryOperatingHoursMonitoring({
+      month: sp.get("month") || undefined,
+      dateFrom: sp.get("dateFrom") || undefined,
+      dateTo: sp.get("dateTo") || undefined,
+      windowPreset: sp.get("windowPreset") || undefined,
+      companyId: Number(sp.get("companyId")) || undefined,
+      regionId: Number(sp.get("regionId")) || undefined,
+      estateId: Number(sp.get("estateId")) || undefined,
+      blockId: Number(sp.get("blockId")) || undefined,
+      pumpTypeId: Number(sp.get("pumpTypeId")) || undefined,
+      status: sp.get("status") ?? undefined,
+      search: sp.get("search") ?? undefined,
+    });
+
+    const buffer = await generateOperatingHoursWorkbook({ report });
+    return new NextResponse(new Uint8Array(buffer), {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="Monitoring_Jam_Pompa_${report.month}.xlsx"`,
       },
     });
   }
@@ -210,13 +241,26 @@ export async function GET(request: NextRequest) {
   });
 
   const issues = await queryLatestIssuesForPumps(filteredPumps, dateFrom, dateTo);
+  const filterParts: string[] = [`${filteredPumps.length} unit pompa`];
+  const statusFilter = sp.get("status");
+  if (statusFilter) {
+    filterParts.push(`Status: ${statusFilter}`);
+  }
+  if (dateFrom || dateTo) {
+    filterParts.push(`Periode: ${dateFrom || "Awal"} s/d ${dateTo || "Sekarang"}`);
+  }
+  const searchFilter = sp.get("search")?.trim();
+  if (searchFilter) {
+    filterParts.push(`Cari: ${searchFilter}`);
+  }
+
   const buffer = await generateRecapWorkbook({
-    filterSummary: `${filteredPumps.length} unit pompa`,
+    filterSummary: filterParts.join(" | "),
     pumps: filteredPumps.map((p) => ({
-      companyName: p.companyName,
-      regionName: p.regionName,
-      estateCode: p.estateCode,
-      blockCode: p.blockCode,
+      companyName: p.companyName ?? "PT TH Indoplantation",
+      regionName: p.regionName ?? "-",
+      estateCode: p.estateCode ?? "-",
+      blockCode: p.blockCode ?? "Belum Assign",
       pumpCode: p.pumpCode,
       pumpTypeName: p.pumpTypeName,
       engineBrandName: p.engineBrandName,

@@ -3,6 +3,7 @@ import {
   serial,
   text,
   integer,
+  numeric,
   boolean,
   timestamp,
   date,
@@ -125,9 +126,8 @@ export const pumps = pgTable(
   {
     id: serial("id").primaryKey(),
     pumpCode: text("pump_code").notNull().unique(),
-    blockId: integer("block_id")
-      .notNull()
-      .references(() => blocks.id, { onDelete: "restrict" }),
+    estateId: integer("estate_id").references(() => estates.id, { onDelete: "restrict" }),
+    blockId: integer("block_id").references(() => blocks.id, { onDelete: "restrict" }),
     pumpTypeId: integer("pump_type_id")
       .notNull()
       .references(() => pumpTypes.id, { onDelete: "restrict" }),
@@ -136,12 +136,45 @@ export const pumps = pgTable(
       .references(() => engineBrands.id, { onDelete: "restrict" }),
     currentUnitStatus: text("current_unit_status").notNull().default("aktif"),
     lastInspectedAt: timestamp("last_inspected_at"),
+    operationalNote: text("operational_note"),
+    operationalCategory: text("operational_category").notNull().default("none"),
+    repairStatus: text("repair_status"),
+    isPreOrder: boolean("is_pre_order").notNull().default(false),
+    breakdownStartDate: date("breakdown_start_date"),
+    locationUpdatedAt: timestamp("location_updated_at"),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
+    index("pumps_estate_idx").on(table.estateId),
     index("pumps_block_idx").on(table.blockId),
     index("pumps_status_idx").on(table.currentUnitStatus),
+  ]
+);
+
+export const pumpOperatingLogs = pgTable(
+  "pump_operating_logs",
+  {
+    id: serial("id").primaryKey(),
+    pumpId: integer("pump_id")
+      .notNull()
+      .references(() => pumps.id, { onDelete: "cascade" }),
+    logDate: date("log_date").notNull(),
+    operatingHours: numeric("operating_hours", { precision: 5, scale: 2 })
+      .notNull()
+      .default("0"),
+    dayStatus: text("day_status").notNull().default("operasi"),
+    notes: text("notes"),
+    recordedById: integer("recorded_by_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    recordedByName: text("recorded_by_name").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("pump_operating_logs_pump_date_idx").on(table.pumpId, table.logDate),
+    index("pump_operating_logs_date_idx").on(table.logDate),
   ]
 );
 
@@ -253,6 +286,10 @@ export const pumpTypePartsRelations = relations(pumpTypeParts, ({ one }) => ({
 }));
 
 export const pumpsRelations = relations(pumps, ({ one, many }) => ({
+  estate: one(estates, {
+    fields: [pumps.estateId],
+    references: [estates.id],
+  }),
   block: one(blocks, {
     fields: [pumps.blockId],
     references: [blocks.id],
@@ -266,6 +303,18 @@ export const pumpsRelations = relations(pumps, ({ one, many }) => ({
     references: [engineBrands.id],
   }),
   inspections: many(inspections),
+  operatingLogs: many(pumpOperatingLogs),
+}));
+
+export const pumpOperatingLogsRelations = relations(pumpOperatingLogs, ({ one }) => ({
+  pump: one(pumps, {
+    fields: [pumpOperatingLogs.pumpId],
+    references: [pumps.id],
+  }),
+  recordedBy: one(users, {
+    fields: [pumpOperatingLogs.recordedById],
+    references: [users.id],
+  }),
 }));
 
 export const inspectionsRelations = relations(inspections, ({ one, many }) => ({

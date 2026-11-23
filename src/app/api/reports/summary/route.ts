@@ -54,11 +54,11 @@ export async function GET(request: NextRequest) {
   >();
 
   for (const p of pumps) {
-    const key = `${p.estateId}`;
+    const key = `${p.estateId ?? 0}`;
     const entry = estateMap.get(key) ?? {
-      estateId: p.estateId,
-      estateCode: p.estateCode,
-      regionName: p.regionName,
+      estateId: p.estateId ?? 0,
+      estateCode: p.estateCode ?? "Belum Assign",
+      regionName: p.regionName ?? "-",
       total: 0,
       aktif: 0,
       perluPerbaikan: 0,

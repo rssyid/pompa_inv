@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import {
@@ -11,16 +11,20 @@ import {
   inspectionPhotos,
   inspections,
   issuePresets,
+  pumpOperatingLogs,
   pumps,
   pumpTypeParts,
   pumpTypes,
   regions,
 } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import { isPumpLocationAssigned } from "@/lib/pump-location";
+import { getMonthBounds } from "@/lib/queries/operating-hours";
 
 const updatePumpSchema = z.object({
   pumpCode: z.string().min(2).max(40).optional(),
-  blockId: z.number().int().positive().optional(),
+  estateId: z.number().int().positive().nullable().optional(),
+  blockId: z.number().int().positive().nullable().optional(),
   pumpTypeId: z.number().int().positive().optional(),
   engineBrandId: z.number().int().positive().optional(),
   isActive: z.boolean().optional(),
@@ -47,6 +51,12 @@ export async function GET(
       currentUnitStatus: pumps.currentUnitStatus,
       lastInspectedAt: pumps.lastInspectedAt,
       isActive: pumps.isActive,
+      operationalNote: pumps.operationalNote,
+      operationalCategory: pumps.operationalCategory,
+      repairStatus: pumps.repairStatus,
+      isPreOrder: pumps.isPreOrder,
+      breakdownStartDate: pumps.breakdownStartDate,
+      locationUpdatedAt: pumps.locationUpdatedAt,
       blockId: blocks.id,
       blockCode: blocks.code,
       estateId: estates.id,
@@ -63,10 +73,10 @@ export async function GET(
       engineBrandName: engineBrands.name,
     })
     .from(pumps)
-    .innerJoin(blocks, eq(pumps.blockId, blocks.id))
-    .innerJoin(estates, eq(blocks.estateId, estates.id))
-    .innerJoin(regions, eq(estates.regionId, regions.id))
-    .innerJoin(companies, eq(regions.companyId, companies.id))
+    .leftJoin(blocks, eq(pumps.blockId, blocks.id))
+    .leftJoin(estates, sql`COALESCE(${blocks.estateId}, ${pumps.estateId}) = ${estates.id}`)
+    .leftJoin(regions, eq(estates.regionId, regions.id))
+    .leftJoin(companies, eq(regions.companyId, companies.id))
     .innerJoin(pumpTypes, eq(pumps.pumpTypeId, pumpTypes.id))
     .innerJoin(engineBrands, eq(pumps.engineBrandId, engineBrands.id))
     .where(eq(pumps.id, pumpId))
@@ -76,7 +86,9 @@ export async function GET(
     return NextResponse.json({ error: "Pompa tidak ditemukan." }, { status: 404 });
   }
 
-  const [templateParts, historyRows] = await Promise.all([
+  const monthBounds = getMonthBounds();
+
+  const [templateParts, historyRows, monthLogs] = await Promise.all([
     db
       .select()
       .from(pumpTypeParts)
@@ -87,6 +99,24 @@ export async function GET(
       .from(inspections)
       .where(eq(inspections.pumpId, pumpId))
       .orderBy(desc(inspections.inspectedAt), desc(inspections.id)),
+    db
+      .select({
+        id: pumpOperatingLogs.id,
+        logDate: pumpOperatingLogs.logDate,
+        operatingHours: pumpOperatingLogs.operatingHours,
+        dayStatus: pumpOperatingLogs.dayStatus,
+        notes: pumpOperatingLogs.notes,
+        recordedByName: pumpOperatingLogs.recordedByName,
+      })
+      .from(pumpOperatingLogs)
+      .where(
+        and(
+          eq(pumpOperatingLogs.pumpId, pumpId),
+          gte(pumpOperatingLogs.logDate, monthBounds.monthStart),
+          lte(pumpOperatingLogs.logDate, monthBounds.monthEnd)
+        )
+      )
+      .orderBy(desc(pumpOperatingLogs.logDate)),
   ]);
 
   const inspectionIds = historyRows.map((h) => h.id);
@@ -136,9 +166,34 @@ export async function GET(
     }
   }
 
+  const monthlyHoursTotal =
+    Math.round(
+      monthLogs.reduce(
+        (acc, row) =>
+          row.dayStatus === "operasi" ? acc + Number(row.operatingHours ?? 0) : acc,
+        0
+      ) * 100
+    ) / 100;
+
   return NextResponse.json({
-    pump,
+    pump: {
+      ...pump,
+      isLocationAssigned: isPumpLocationAssigned({
+        blockId: pump.blockId,
+        blockCode: pump.blockCode,
+      }),
+    },
     templateParts: templateParts.filter((p) => p.isActive),
+    operatingLogs: monthLogs.map((row) => ({
+      id: row.id,
+      logDate: row.logDate,
+      operatingHours: Number(row.operatingHours ?? 0),
+      dayStatus: row.dayStatus,
+      notes: row.notes,
+      recordedByName: row.recordedByName,
+    })),
+    monthlyHoursTotal,
+    monthLabel: monthBounds.monthLabel,
     inspections: historyRows.map((h) => ({
       ...h,
       items: itemsByInspection.get(h.id) ?? [],
@@ -169,6 +224,7 @@ export async function PATCH(
   const updates: Record<string, unknown> = {};
   if (parsed.data.pumpCode !== undefined)
     updates.pumpCode = parsed.data.pumpCode.trim().toUpperCase();
+  if (parsed.data.estateId !== undefined) updates.estateId = parsed.data.estateId;
   if (parsed.data.blockId !== undefined) updates.blockId = parsed.data.blockId;
   if (parsed.data.pumpTypeId !== undefined) updates.pumpTypeId = parsed.data.pumpTypeId;
   if (parsed.data.engineBrandId !== undefined) updates.engineBrandId = parsed.data.engineBrandId;

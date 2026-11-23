@@ -301,11 +301,13 @@ export async function importParsedPumpRecords(params: {
         .insert(pumps)
         .values({
           pumpCode: rec.pumpCode,
+          estateId: estate.id,
           blockId: block.id,
           pumpTypeId: pumpType.id,
           engineBrandId: engineBrand.id,
           currentUnitStatus: rec.unitStatus,
           lastInspectedAt: new Date(inspectedAt),
+          breakdownStartDate: rec.unitStatus === "aktif" ? null : inspectedAt,
         })
         .returning();
       pump = insertedPump;

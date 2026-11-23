@@ -8,6 +8,7 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Database,
   FileSpreadsheet,
   LayoutDashboard,
@@ -30,13 +31,15 @@ export interface ClientSessionUser {
 interface NavItem {
   href: string;
   label: string;
+  mobileLabel?: string;
   icon: React.ComponentType<{ className?: string }>;
   group: "Operasional" | "Administrasi";
 }
 
 const OPERATIONAL_NAV: NavItem[] = [
   { href: "/", label: "Ringkasan", icon: LayoutDashboard, group: "Operasional" },
-  { href: "/pumps", label: "Daftar Pompa", icon: Wrench, group: "Operasional" },
+  { href: "/pumps", label: "Daftar Pompa", mobileLabel: "Pompa", icon: Wrench, group: "Operasional" },
+  { href: "/operating-hours", label: "Jam Kerja", icon: Clock, group: "Operasional" },
   { href: "/reports", label: "Laporan", icon: BarChart3, group: "Operasional" },
 ];
 
@@ -329,7 +332,7 @@ export function AppShell({
                   }`}
                 >
                   <Icon className="h-4 w-4" aria-hidden="true" />
-                  <span>{item.label}</span>
+                  <span className="truncate">{item.mobileLabel ?? item.label}</span>
                 </Link>
               </li>
             );

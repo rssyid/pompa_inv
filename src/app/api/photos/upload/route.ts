@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { blocks, companies, estates, pumps, regions } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
@@ -52,10 +52,10 @@ export async function POST(request: NextRequest) {
           pumpCode: pumps.pumpCode,
         })
         .from(pumps)
-        .innerJoin(blocks, eq(pumps.blockId, blocks.id))
-        .innerJoin(estates, eq(blocks.estateId, estates.id))
-        .innerJoin(regions, eq(estates.regionId, regions.id))
-        .innerJoin(companies, eq(regions.companyId, companies.id))
+        .leftJoin(blocks, eq(pumps.blockId, blocks.id))
+        .leftJoin(estates, sql`COALESCE(${blocks.estateId}, ${pumps.estateId}) = ${estates.id}`)
+        .leftJoin(regions, eq(estates.regionId, regions.id))
+        .leftJoin(companies, eq(regions.companyId, companies.id))
         .where(eq(pumps.id, pumpId))
         .limit(1);
 
@@ -65,16 +65,21 @@ export async function POST(request: NextRequest) {
           now.getMinutes()
         ).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
 
+        const companyCode = meta.companyCode || "THIP";
+        const regionCode = meta.regionCode || "UNASSIGNED";
+        const estateCode = meta.estateCode || "UNASSIGNED";
+        const blockCode = meta.blockCode || "Tanpa_Blok";
+
         folderPath = buildPumpFolderPath({
-          companyCode: meta.companyCode,
-          regionCode: meta.regionCode,
-          estateCode: meta.estateCode,
+          companyCode,
+          regionCode,
+          estateCode,
           pumpCode: meta.pumpCode,
         });
 
         fileName = buildPumpPhotoFileName({
-          estateCode: meta.estateCode,
-          blockCode: meta.blockCode,
+          estateCode,
+          blockCode,
           pumpCode: meta.pumpCode,
           inspectedAt,
           sequence,

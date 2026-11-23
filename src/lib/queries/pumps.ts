@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { inspectionItems, issuePresets } from "@/db/schema";
+import { isPumpLocationAssigned } from "@/lib/pump-location";
 
 export interface PumpFilterParams {
   companyId?: number;
@@ -19,18 +20,18 @@ export interface EnrichedPumpRow {
   currentUnitStatus: string;
   lastInspectedAt: Date | null;
   isActive: boolean;
-  blockId: number;
-  blockCode: string;
-  blockName: string;
-  estateId: number;
-  estateCode: string;
-  estateName: string;
-  regionId: number;
-  regionCode: string;
-  regionName: string;
-  companyId: number;
-  companyCode: string;
-  companyName: string;
+  blockId: number | null;
+  blockCode: string | null;
+  blockName: string | null;
+  estateId: number | null;
+  estateCode: string | null;
+  estateName: string | null;
+  regionId: number | null;
+  regionCode: string | null;
+  regionName: string | null;
+  companyId: number | null;
+  companyCode: string | null;
+  companyName: string | null;
   pumpTypeId: number;
   pumpTypeCode: string;
   pumpTypeName: string;
@@ -41,6 +42,13 @@ export interface EnrichedPumpRow {
   latestInspectorName: string | null;
   issueCount: number;
   photoCount: number;
+  isLocationAssigned: boolean;
+  operationalNote: string | null;
+  operationalCategory: string;
+  repairStatus: string | null;
+  isPreOrder: boolean;
+  breakdownStartDate: string | null;
+  locationUpdatedAt: Date | null;
 }
 
 export async function queryFilteredPumps(filters: PumpFilterParams): Promise<EnrichedPumpRow[]> {
@@ -60,7 +68,9 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
   }
   if (filters.search?.trim()) {
     const q = `%${filters.search.trim()}%`;
-    whereClauses.push(sql`(p.pump_code ILIKE ${q} OR b.code ILIKE ${q} OR e.code ILIKE ${q})`);
+    whereClauses.push(
+      sql`(p.pump_code ILIKE ${q} OR COALESCE(b.code, '') ILIKE ${q} OR COALESCE(e.code, '') ILIKE ${q})`
+    );
   }
 
   const whereSql =
@@ -76,6 +86,12 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
         p.current_unit_status AS "currentUnitStatus",
         p.last_inspected_at AS "lastInspectedAt",
         p.is_active AS "isActive",
+        p.operational_note AS "operationalNote",
+        p.operational_category AS "operationalCategory",
+        p.repair_status AS "repairStatus",
+        p.is_pre_order AS "isPreOrder",
+        p.breakdown_start_date::text AS "breakdownStartDate",
+        p.location_updated_at AS "locationUpdatedAt",
         b.id AS "blockId",
         b.code AS "blockCode",
         b.name AS "blockName",
@@ -94,10 +110,10 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
         eb.id AS "engineBrandId",
         eb.name AS "engineBrandName"
       FROM pumps p
-      INNER JOIN blocks b ON p.block_id = b.id
-      INNER JOIN estates e ON b.estate_id = e.id
-      INNER JOIN regions r ON e.region_id = r.id
-      INNER JOIN companies c ON r.company_id = c.id
+      LEFT JOIN blocks b ON p.block_id = b.id
+      LEFT JOIN estates e ON COALESCE(b.estate_id, p.estate_id) = e.id
+      LEFT JOIN regions r ON e.region_id = r.id
+      LEFT JOIN companies c ON r.company_id = c.id
       INNER JOIN pump_types pt ON p.pump_type_id = pt.id
       INNER JOIN engine_brands eb ON p.engine_brand_id = eb.id
       ${whereSql}
@@ -140,13 +156,19 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
     LEFT JOIN latest_inspections li ON li.pump_id = fp.id
     LEFT JOIN issue_counts ic ON ic.inspection_id = li.id
     LEFT JOIN photo_counts pc ON pc.inspection_id = li.id
-    ORDER BY fp."estateCode" ASC, fp."pumpCode" ASC
+    ORDER BY COALESCE(fp."estateCode", 'ZZZ') ASC, fp."pumpCode" ASC
   `);
 
   return (result.rows as unknown as EnrichedPumpRow[]).map((row) => ({
     ...row,
     issueCount: Number(row.issueCount ?? 0),
     photoCount: Number(row.photoCount ?? 0),
+    isPreOrder: Boolean(row.isPreOrder),
+    operationalCategory: row.operationalCategory || "none",
+    isLocationAssigned: isPumpLocationAssigned({
+      blockId: row.blockId,
+      blockCode: row.blockCode,
+    }),
   }));
 }
 
@@ -202,9 +224,9 @@ export async function queryLatestIssuesForPumps(
       id: item.id,
       pumpId: p.id,
       pumpCode: p.pumpCode,
-      regionName: p.regionName,
-      estateCode: p.estateCode,
-      blockCode: p.blockCode,
+      regionName: p.regionName ?? "-",
+      estateCode: p.estateCode ?? "-",
+      blockCode: p.blockCode ?? "Belum Assign",
       pumpTypeName: p.pumpTypeName,
       sectionName: item.sectionName,
       partName: item.partName,

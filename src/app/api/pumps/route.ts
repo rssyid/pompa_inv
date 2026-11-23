@@ -2,16 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
-import { pumps } from "@/db/schema";
+import { blocks, pumps } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
 import { queryFilteredPumps } from "@/lib/queries/pumps";
 
 const createPumpSchema = z.object({
   pumpCode: z.string().min(2, "Kode pompa wajib diisi.").max(40),
-  blockId: z.number().int().positive(),
+  estateId: z.number().int().positive().nullable().optional(),
+  blockId: z.number().int().positive().nullable().optional(),
   pumpTypeId: z.number().int().positive(),
   engineBrandId: z.number().int().positive(),
   currentUnitStatus: z.enum(["aktif", "perlu_perbaikan", "rusak_total"]).default("aktif"),
+  operationalNote: z.string().max(240).nullable().optional(),
+  operationalCategory: z
+    .enum(["none", "tbm", "pasang_surut", "wsc_selesai", "discharge", "rusak_po"])
+    .default("none"),
+  repairStatus: z.string().max(120).nullable().optional(),
+  isPreOrder: z.boolean().default(false),
 });
 
 export async function GET(request: NextRequest) {
@@ -61,14 +68,38 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let resolvedEstateId: number | null = parsed.data.estateId ?? null;
+  const resolvedBlockId: number | null = parsed.data.blockId ?? null;
+  if (resolvedBlockId) {
+    const [blk] = await db
+      .select({ estateId: blocks.estateId })
+      .from(blocks)
+      .where(eq(blocks.id, resolvedBlockId))
+      .limit(1);
+    if (!blk) {
+      return NextResponse.json({ error: "Blok lokasi tidak ditemukan." }, { status: 404 });
+    }
+    resolvedEstateId = blk.estateId;
+  }
+
   const [created] = await db
     .insert(pumps)
     .values({
       pumpCode,
-      blockId: parsed.data.blockId,
+      estateId: resolvedEstateId,
+      blockId: resolvedBlockId,
       pumpTypeId: parsed.data.pumpTypeId,
       engineBrandId: parsed.data.engineBrandId,
       currentUnitStatus: parsed.data.currentUnitStatus,
+      operationalNote: parsed.data.operationalNote?.trim() || null,
+      operationalCategory: parsed.data.operationalCategory,
+      repairStatus: parsed.data.repairStatus?.trim() || null,
+      isPreOrder: parsed.data.isPreOrder,
+      breakdownStartDate:
+        parsed.data.currentUnitStatus === "aktif"
+          ? null
+          : new Date().toISOString().slice(0, 10),
+      locationUpdatedAt: resolvedBlockId || resolvedEstateId ? new Date() : null,
     })
     .returning();
 

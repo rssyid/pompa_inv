@@ -4,10 +4,10 @@ export interface PrintPumpInfo {
   id: number;
   pumpCode: string;
   currentUnitStatus: string;
-  blockCode: string;
-  estateCode: string;
-  regionName: string;
-  companyName: string;
+  blockCode: string | null;
+  estateCode: string | null;
+  regionName: string | null;
+  companyName: string | null;
   pumpTypeName: string;
   engineBrandName: string;
 }
