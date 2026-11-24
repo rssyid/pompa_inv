@@ -1,34 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
-import { z } from "zod";
 import { getDb } from "@/db";
 import { issuePresets } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import {
+  deleteByIdSchema,
+  extractDeleteId,
+  issuePresetCreateSchema,
+  issuePresetPatchSchema,
+} from "@/lib/master-validation";
 import { MASTER_TREE_TAG } from "@/lib/queries/master";
-
-const createSchema = z.object({
-  label: z.string().min(2).max(80),
-  defaultAvailability: z.enum(["ada", "tidak_lengkap", "hilang"]),
-  defaultCondition: z.enum(["baik", "rusak"]),
-  sortOrder: z.number().int().min(0).default(50),
-});
-
-const patchSchema = z.object({
-  id: z.number().int().positive(),
-  label: z.string().min(2).max(80).optional(),
-  defaultAvailability: z.enum(["ada", "tidak_lengkap", "hilang"]).optional(),
-  defaultCondition: z.enum(["baik", "rusak"]).optional(),
-  sortOrder: z.number().int().min(0).optional(),
-  isActive: z.boolean().optional(),
-});
 
 export async function POST(request: NextRequest) {
   const auth = await requireApiSession("admin");
   if ("error" in auth) return auth.error;
 
   const body = await request.json();
-  const parsed = createSchema.safeParse(body);
+  const parsed = issuePresetCreateSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Data Temuan Standar tidak valid." }, { status: 400 });
   }
@@ -56,9 +45,12 @@ export async function PATCH(request: NextRequest) {
   if ("error" in auth) return auth.error;
 
   const body = await request.json();
-  const parsed = patchSchema.safeParse(body);
+  const parsed = issuePresetPatchSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Data pembaruan Temuan Standar tidak valid." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Data pembaruan Temuan Standar tidak valid." },
+      { status: 400 }
+    );
   }
 
   const updates: Record<string, unknown> = {};
@@ -70,13 +62,50 @@ export async function PATCH(request: NextRequest) {
   if (parsed.data.sortOrder !== undefined) updates.sortOrder = parsed.data.sortOrder;
   if (parsed.data.isActive !== undefined) updates.isActive = parsed.data.isActive;
 
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json(
+      { error: "Tidak ada data Temuan Standar yang diperbarui." },
+      { status: 400 }
+    );
+  }
+
   const db = getDb();
-  const [updated] = await db
-    .update(issuePresets)
-    .set(updates)
+  try {
+    const [updated] = await db
+      .update(issuePresets)
+      .set(updates)
+      .where(eq(issuePresets.id, parsed.data.id))
+      .returning();
+    if (!updated) {
+      return NextResponse.json({ error: "Temuan Standar tidak ditemukan." }, { status: 404 });
+    }
+    revalidateTag(MASTER_TREE_TAG);
+    return NextResponse.json({ item: updated });
+  } catch {
+    return NextResponse.json({ error: "Label Temuan Standar sudah terdaftar." }, { status: 409 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const auth = await requireApiSession("admin");
+  if ("error" in auth) return auth.error;
+
+  const rawId = await extractDeleteId(request);
+  const parsed = deleteByIdSchema.safeParse({ id: rawId });
+  if (!parsed.success) {
+    return NextResponse.json({ error: "ID Temuan Standar tidak valid." }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [deleted] = await db
+    .delete(issuePresets)
     .where(eq(issuePresets.id, parsed.data.id))
-    .returning();
-  if (!updated) return NextResponse.json({ error: "Temuan Standar tidak ditemukan." }, { status: 404 });
+    .returning({ id: issuePresets.id });
+
+  if (!deleted) {
+    return NextResponse.json({ error: "Temuan Standar tidak ditemukan." }, { status: 404 });
+  }
+
   revalidateTag(MASTER_TREE_TAG);
-  return NextResponse.json({ item: updated });
+  return NextResponse.json({ deletedId: deleted.id });
 }

@@ -3,9 +3,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import { MasterTreeData } from "@/components/HierarchyFilterBar";
+import { MasterEditDialog, MasterEditTarget } from "@/components/MasterEditDialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
+
+interface MasterDeleteTarget {
+  title: string;
+  description: string;
+  url: string;
+  payload: Record<string, unknown>;
+  successMsg: string;
+}
 
 type MasterTab =
   | "pt"
@@ -45,6 +55,7 @@ export default function AdminMasterPage() {
 
   const [ptTypeCode, setPtTypeCode] = useState("");
   const [ptTypeName, setPtTypeName] = useState("");
+  const [ptTypeDesc, setPtTypeDesc] = useState("");
   const [selectedPumpTypeId, setSelectedPumpTypeId] = useState("");
   const [partSectionCode, setPartSectionCode] = useState("C");
   const [partSectionName, setPartSectionName] = useState("POMPA 1");
@@ -57,6 +68,9 @@ export default function AdminMasterPage() {
   const [presetLabel, setPresetLabel] = useState("");
   const [presetAvail, setPresetAvail] = useState<"ada" | "tidak_lengkap" | "hilang">("ada");
   const [presetCond, setPresetCond] = useState<"baik" | "rusak">("rusak");
+
+  const [editTarget, setEditTarget] = useState<MasterEditTarget | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<MasterDeleteTarget | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -76,17 +90,20 @@ export default function AdminMasterPage() {
       }
       setEstateOrderDrafts(nextDrafts);
 
-      if (!regCompanyId && treeRes.companies[0]) {
-        setRegCompanyId(String(treeRes.companies[0].id));
+      if (!regCompanyId || !treeRes.companies.some((c) => String(c.id) === regCompanyId)) {
+        setRegCompanyId(treeRes.companies[0] ? String(treeRes.companies[0].id) : "");
       }
-      if (!estRegionId && treeRes.regions[0]) {
-        setEstRegionId(String(treeRes.regions[0].id));
+      if (!estRegionId || !treeRes.regions.some((r) => String(r.id) === estRegionId)) {
+        setEstRegionId(treeRes.regions[0] ? String(treeRes.regions[0].id) : "");
       }
-      if (!blkEstateId && treeRes.estates[0]) {
-        setBlkEstateId(String(treeRes.estates[0].id));
+      if (!blkEstateId || !treeRes.estates.some((es) => String(es.id) === blkEstateId)) {
+        setBlkEstateId(treeRes.estates[0] ? String(treeRes.estates[0].id) : "");
       }
-      if (!selectedPumpTypeId && treeRes.pumpTypes[0]) {
-        setSelectedPumpTypeId(String(treeRes.pumpTypes[0].id));
+      if (
+        !selectedPumpTypeId ||
+        !treeRes.pumpTypes.some((pt) => String(pt.id) === selectedPumpTypeId)
+      ) {
+        setSelectedPumpTypeId(treeRes.pumpTypes[0] ? String(treeRes.pumpTypes[0].id) : "");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat master data.");
@@ -99,7 +116,12 @@ export default function AdminMasterPage() {
     loadData();
   }, [loadData]);
 
-  async function mutate(url: string, method: "POST" | "PATCH", payload: unknown, successMsg: string) {
+  async function mutate(
+    url: string,
+    method: "POST" | "PATCH" | "DELETE",
+    payload: unknown,
+    successMsg: string
+  ) {
     setSaving(true);
     setError(null);
     setNotice(null);
@@ -177,6 +199,48 @@ export default function AdminMasterPage() {
       "PATCH",
       { orders },
       "Urutan Estate berhasil diperbarui."
+    );
+  }
+
+  function renderRowActions(params: {
+    editTarget: MasterEditTarget;
+    toggleUrl: string;
+    togglePayload: Record<string, unknown>;
+    toggleSuccessMsg: string;
+    isActive: boolean;
+    deleteTarget: MasterDeleteTarget;
+  }) {
+    return (
+      <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={() => setEditTarget(params.editTarget)}
+          className="min-h-[44px] rounded border border-field-border bg-white px-3 text-xs font-semibold text-field-ink hover:bg-field-bg"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            mutate(
+              params.toggleUrl,
+              "PATCH",
+              params.togglePayload,
+              params.toggleSuccessMsg
+            )
+          }
+          className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold text-field-ink hover:bg-[#EAEFEA]"
+        >
+          {params.isActive ? "Nonaktifkan" : "Aktifkan"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDeleteTarget(params.deleteTarget)}
+          className="min-h-[44px] rounded border border-[#FCA5A5] bg-[#FEF2F2] px-3 text-xs font-semibold text-[#991B1B] hover:bg-[#FEE2E2]"
+        >
+          Hapus
+        </button>
+      </div>
     );
   }
 
@@ -291,20 +355,20 @@ export default function AdminMasterPage() {
                         {c.isActive ? "Aktif" : "Nonaktif"}
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            mutate(
-                              "/api/master/companies",
-                              "PATCH",
-                              { id: c.id, isActive: !c.isActive },
-                              `Status PT ${c.code} diperbarui.`
-                            )
-                          }
-                          className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                        >
-                          {c.isActive ? "Nonaktifkan" : "Aktifkan"}
-                        </button>
+                        {renderRowActions({
+                          editTarget: { kind: "company", item: c },
+                          toggleUrl: "/api/master/companies",
+                          togglePayload: { id: c.id, isActive: !c.isActive },
+                          toggleSuccessMsg: `Status PT ${c.code} diperbarui.`,
+                          isActive: c.isActive,
+                          deleteTarget: {
+                            title: `Hapus PT ${c.code}`,
+                            description: `Hapus permanen PT "${c.name}" (${c.code})? PT yang masih memiliki Region akan ditolak.`,
+                            url: "/api/master/companies",
+                            payload: { id: c.id },
+                            successMsg: `PT ${c.code} berhasil dihapus.`,
+                          },
+                        })}
                       </td>
                     </tr>
                   ))}
@@ -412,20 +476,20 @@ export default function AdminMasterPage() {
                           {r.isActive ? "Aktif" : "Nonaktif"}
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              mutate(
-                                "/api/master/regions",
-                                "PATCH",
-                                { id: r.id, isActive: !r.isActive },
-                                `Status Region ${r.code} diperbarui.`
-                              )
-                            }
-                            className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                          >
-                            {r.isActive ? "Nonaktifkan" : "Aktifkan"}
-                          </button>
+                          {renderRowActions({
+                            editTarget: { kind: "region", item: r },
+                            toggleUrl: "/api/master/regions",
+                            togglePayload: { id: r.id, isActive: !r.isActive },
+                            toggleSuccessMsg: `Status Region ${r.code} diperbarui.`,
+                            isActive: r.isActive,
+                            deleteTarget: {
+                              title: `Hapus Region ${r.code}`,
+                              description: `Hapus permanen Region "${r.name}" (${r.code})? Region yang masih memiliki Estate akan ditolak.`,
+                              url: "/api/master/regions",
+                              payload: { id: r.id },
+                              successMsg: `Region ${r.code} berhasil dihapus.`,
+                            },
+                          })}
                         </td>
                       </tr>
                     );
@@ -606,20 +670,20 @@ export default function AdminMasterPage() {
                           {es.isActive ? "Aktif" : "Nonaktif"}
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              mutate(
-                                "/api/master/estates",
-                                "PATCH",
-                                { id: es.id, isActive: !es.isActive },
-                                `Status Estate ${es.code} diperbarui.`
-                              )
-                            }
-                            className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                          >
-                            {es.isActive ? "Nonaktifkan" : "Aktifkan"}
-                          </button>
+                          {renderRowActions({
+                            editTarget: { kind: "estate", item: es },
+                            toggleUrl: "/api/master/estates",
+                            togglePayload: { id: es.id, isActive: !es.isActive },
+                            toggleSuccessMsg: `Status Estate ${es.code} diperbarui.`,
+                            isActive: es.isActive,
+                            deleteTarget: {
+                              title: `Hapus Estate ${es.code}`,
+                              description: `Hapus permanen Estate "${es.name}" (${es.code})? Estate yang masih memiliki Block atau unit Pompa akan ditolak.`,
+                              url: "/api/master/estates",
+                              payload: { id: es.id },
+                              successMsg: `Estate ${es.code} berhasil dihapus.`,
+                            },
+                          })}
                         </td>
                       </tr>
                     );
@@ -725,20 +789,20 @@ export default function AdminMasterPage() {
                           {b.isActive ? "Aktif" : "Nonaktif"}
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              mutate(
-                                "/api/master/blocks",
-                                "PATCH",
-                                { id: b.id, isActive: !b.isActive },
-                                `Status Block ${b.code} diperbarui.`
-                              )
-                            }
-                            className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                          >
-                            {b.isActive ? "Nonaktifkan" : "Aktifkan"}
-                          </button>
+                          {renderRowActions({
+                            editTarget: { kind: "block", item: b },
+                            toggleUrl: "/api/master/blocks",
+                            togglePayload: { id: b.id, isActive: !b.isActive },
+                            toggleSuccessMsg: `Status Block ${b.code} diperbarui.`,
+                            isActive: b.isActive,
+                            deleteTarget: {
+                              title: `Hapus Block ${b.code}`,
+                              description: `Hapus permanen Block "${b.code}" pada Estate ${est?.code ?? "-"}? Block yang masih dipakai pompa akan ditolak.`,
+                              url: "/api/master/blocks",
+                              payload: { id: b.id },
+                              successMsg: `Block ${b.code} berhasil dihapus.`,
+                            },
+                          })}
                         </td>
                       </tr>
                     );
@@ -759,14 +823,19 @@ export default function AdminMasterPage() {
                   mutate(
                     "/api/master/pump-types",
                     "POST",
-                    { code: ptTypeCode, name: ptTypeName },
+                    {
+                      code: ptTypeCode,
+                      name: ptTypeName,
+                      description: ptTypeDesc.trim() || undefined,
+                    },
                     "Jenis Pompa berhasil ditambahkan."
                   ).then(() => {
                     setPtTypeCode("");
                     setPtTypeName("");
+                    setPtTypeDesc("");
                   });
                 }}
-                className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
               >
                 <div>
                   <label htmlFor="ptype-code" className="mb-1 block text-xs font-semibold text-field-muted">
@@ -794,6 +863,18 @@ export default function AdminMasterPage() {
                     className="min-h-[44px] w-full rounded-md border border-field-border px-3 text-sm"
                   />
                 </div>
+                <div>
+                  <label htmlFor="ptype-desc" className="mb-1 block text-xs font-semibold text-field-muted">
+                    Deskripsi (Opsional)
+                  </label>
+                  <input
+                    id="ptype-desc"
+                    value={ptTypeDesc}
+                    onChange={(e) => setPtTypeDesc(e.target.value)}
+                    placeholder="Keterangan singkat"
+                    className="min-h-[44px] w-full rounded-md border border-field-border px-3 text-sm"
+                  />
+                </div>
                 <div className="flex items-end">
                   <button
                     type="submit"
@@ -804,6 +885,50 @@ export default function AdminMasterPage() {
                   </button>
                 </div>
               </form>
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[620px] text-left text-sm">
+                  <thead className="border-b border-field-border bg-field-bg text-xs font-semibold text-field-muted">
+                    <tr>
+                      <th className="px-3 py-2.5">Kode</th>
+                      <th className="px-3 py-2.5">Nama Jenis</th>
+                      <th className="px-3 py-2.5">Deskripsi</th>
+                      <th className="px-3 py-2.5">Status</th>
+                      <th className="px-3 py-2.5 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-field-border">
+                    {master.pumpTypes.map((pt) => (
+                      <tr key={pt.id}>
+                        <td className="px-3 py-2.5 font-mono text-xs font-semibold">{pt.code}</td>
+                        <td className="px-3 py-2.5 font-medium">{pt.name}</td>
+                        <td className="px-3 py-2.5 text-xs text-field-muted">
+                          {pt.description || "-"}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs">
+                          {pt.isActive ? "Aktif" : "Nonaktif"}
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          {renderRowActions({
+                            editTarget: { kind: "pump_type", item: pt },
+                            toggleUrl: "/api/master/pump-types",
+                            togglePayload: { id: pt.id, isActive: !pt.isActive },
+                            toggleSuccessMsg: `Status Jenis Pompa ${pt.name} diperbarui.`,
+                            isActive: pt.isActive,
+                            deleteTarget: {
+                              title: `Hapus Jenis Pompa ${pt.name}`,
+                              description: `Hapus permanen Jenis Pompa "${pt.name}" (${pt.code}) beserta template komponennya? Jenis Pompa yang masih dipakai unit akan ditolak.`,
+                              url: "/api/master/pump-types",
+                              payload: { id: pt.id },
+                              successMsg: `Jenis Pompa ${pt.name} berhasil dihapus.`,
+                            },
+                          })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
 
             <section className="space-y-4 rounded-lg border border-field-border bg-field-surface p-4">
@@ -934,14 +1059,16 @@ export default function AdminMasterPage() {
                 />
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
+                  <table className="w-full min-w-[660px] text-left text-sm">
                     <thead className="border-b border-field-border bg-field-bg text-xs font-semibold text-field-muted">
                       <tr>
                         <th className="px-3 py-2">Bagian</th>
                         <th className="px-3 py-2">No</th>
                         <th className="px-3 py-2">Nama Komponen</th>
                         <th className="px-3 py-2 text-right">Qty</th>
-                        <th className="px-3 py-2 text-right">Status</th>
+                        <th className="px-3 py-2 text-right">Urutan</th>
+                        <th className="px-3 py-2">Status</th>
+                        <th className="px-3 py-2 text-right">Aksi</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-field-border">
@@ -955,21 +1082,27 @@ export default function AdminMasterPage() {
                           <td className="px-3 py-2 text-right font-mono tabular-nums">
                             {part.defaultQty}
                           </td>
+                          <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-field-muted">
+                            {part.sortOrder}
+                          </td>
+                          <td className="px-3 py-2 text-xs">
+                            {part.isActive ? "Aktif" : "Nonaktif"}
+                          </td>
                           <td className="px-3 py-2 text-right">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                mutate(
-                                  `/api/master/pump-types/${selectedPumpTypeId}/parts`,
-                                  "PATCH",
-                                  { partId: part.id, isActive: !part.isActive },
-                                  `Status komponen ${part.partName} diperbarui.`
-                                )
-                              }
-                              className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                            >
-                              {part.isActive ? "Aktif" : "Nonaktif"}
-                            </button>
+                            {renderRowActions({
+                              editTarget: { kind: "pump_type_part", item: part },
+                              toggleUrl: `/api/master/pump-types/${selectedPumpTypeId}/parts`,
+                              togglePayload: { partId: part.id, isActive: !part.isActive },
+                              toggleSuccessMsg: `Status komponen ${part.partName} diperbarui.`,
+                              isActive: part.isActive,
+                              deleteTarget: {
+                                title: `Hapus Komponen ${part.partName}`,
+                                description: `Hapus komponen "${part.partName}" dari template? Data inspeksi lama tidak ikut terhapus.`,
+                                url: `/api/master/pump-types/${selectedPumpTypeId}/parts`,
+                                payload: { partId: part.id },
+                                successMsg: `Komponen "${part.partName}" berhasil dihapus.`,
+                              },
+                            })}
                           </td>
                         </tr>
                       ))}
@@ -1018,27 +1151,43 @@ export default function AdminMasterPage() {
               </button>
             </form>
 
-            <ul className="divide-y divide-field-border rounded-md border border-field-border">
-              {master.engineBrands.map((eb) => (
-                <li key={eb.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                  <span className="font-medium">{eb.name}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      mutate(
-                        "/api/master/engine-brands",
-                        "PATCH",
-                        { id: eb.id, isActive: !eb.isActive },
-                        `Merek ${eb.name} diperbarui.`
-                      )
-                    }
-                    className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                  >
-                    {eb.isActive ? "Aktif" : "Nonaktif"}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[460px] text-left text-sm">
+                <thead className="border-b border-field-border bg-field-bg text-xs font-semibold text-field-muted">
+                  <tr>
+                    <th className="px-3 py-2.5">Nama Merek Mesin</th>
+                    <th className="px-3 py-2.5">Status</th>
+                    <th className="px-3 py-2.5 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-field-border">
+                  {master.engineBrands.map((eb) => (
+                    <tr key={eb.id}>
+                      <td className="px-3 py-2.5 font-medium">{eb.name}</td>
+                      <td className="px-3 py-2.5 text-xs">
+                        {eb.isActive ? "Aktif" : "Nonaktif"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {renderRowActions({
+                          editTarget: { kind: "engine_brand", item: eb },
+                          toggleUrl: "/api/master/engine-brands",
+                          togglePayload: { id: eb.id, isActive: !eb.isActive },
+                          toggleSuccessMsg: `Merek ${eb.name} diperbarui.`,
+                          isActive: eb.isActive,
+                          deleteTarget: {
+                            title: `Hapus Merek ${eb.name}`,
+                            description: `Hapus permanen Merek Mesin "${eb.name}"? Merek yang masih dipakai unit pompa akan ditolak.`,
+                            url: "/api/master/engine-brands",
+                            payload: { id: eb.id },
+                            successMsg: `Merek Mesin "${eb.name}" berhasil dihapus.`,
+                          },
+                        })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
 
@@ -1120,36 +1269,44 @@ export default function AdminMasterPage() {
             </form>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-left text-sm">
+              <table className="w-full min-w-[640px] text-left text-sm">
                 <thead className="border-b border-field-border bg-field-bg text-xs font-semibold text-field-muted">
                   <tr>
+                    <th className="w-20 px-3 py-2">Urutan</th>
                     <th className="px-3 py-2">Label Temuan</th>
                     <th className="px-3 py-2">Default Ketersediaan</th>
                     <th className="px-3 py-2">Default Kondisi</th>
-                    <th className="px-3 py-2 text-right">Status</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2 text-right">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-field-border">
                   {master.issuePresets.map((ip) => (
                     <tr key={ip.id}>
+                      <td className="px-3 py-2 font-mono text-xs tabular-nums text-field-muted">
+                        {ip.sortOrder}
+                      </td>
                       <td className="px-3 py-2 font-medium">{ip.label}</td>
                       <td className="px-3 py-2 text-xs">{ip.defaultAvailability}</td>
                       <td className="px-3 py-2 text-xs">{ip.defaultCondition}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {ip.isActive ? "Aktif" : "Nonaktif"}
+                      </td>
                       <td className="px-3 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            mutate(
-                              "/api/master/issue-presets",
-                              "PATCH",
-                              { id: ip.id, isActive: !ip.isActive },
-                              `Status temuan "${ip.label}" diperbarui.`
-                            )
-                          }
-                          className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                        >
-                          {ip.isActive ? "Aktif" : "Nonaktif"}
-                        </button>
+                        {renderRowActions({
+                          editTarget: { kind: "issue_preset", item: ip },
+                          toggleUrl: "/api/master/issue-presets",
+                          togglePayload: { id: ip.id, isActive: !ip.isActive },
+                          toggleSuccessMsg: `Status temuan "${ip.label}" diperbarui.`,
+                          isActive: ip.isActive,
+                          deleteTarget: {
+                            title: `Hapus Temuan "${ip.label}"`,
+                            description: `Hapus permanen Temuan Standar "${ip.label}"? Histori inspeksi yang sudah tercatat tetap aman.`,
+                            url: "/api/master/issue-presets",
+                            payload: { id: ip.id },
+                            successMsg: `Temuan Standar "${ip.label}" berhasil dihapus.`,
+                          },
+                        })}
                       </td>
                     </tr>
                   ))}
@@ -1159,6 +1316,37 @@ export default function AdminMasterPage() {
           </section>
         )}
       </div>
+
+      {editTarget && master && (
+        <MasterEditDialog
+          target={editTarget}
+          master={master}
+          onClose={() => setEditTarget(null)}
+          onSaved={async (msg) => {
+            setError(null);
+            setNotice(msg);
+            await Promise.all([loadData(), refreshMaster()]);
+          }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDeleteDialog
+          title={deleteTarget.title}
+          description={deleteTarget.description}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            await fetchJson(deleteTarget.url, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(deleteTarget.payload),
+            });
+            setError(null);
+            setNotice(deleteTarget.successMsg);
+            await Promise.all([loadData(), refreshMaster()]);
+          }}
+        />
+      )}
     </AppShell>
   );
 }

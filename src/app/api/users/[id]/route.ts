@@ -53,6 +53,10 @@ export async function PATCH(
       updates.passwordHash = await hashPassword(parsed.data.newPassword);
     }
 
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: "Tidak ada data yang diperbarui." }, { status: 400 });
+    }
+
     const db = getDb();
     const [updated] = await db
       .update(users)
@@ -75,5 +79,43 @@ export async function PATCH(
   } catch (err) {
     console.error("Update user error:", err);
     return NextResponse.json({ error: "Gagal memperbarui data user." }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const auth = await requireApiSession("admin");
+  if ("error" in auth) return auth.error;
+
+  const { id } = await context.params;
+  const userId = Number(id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return NextResponse.json({ error: "ID user tidak valid." }, { status: 400 });
+  }
+
+  if (userId === auth.user.userId) {
+    return NextResponse.json(
+      { error: "Anda tidak dapat menghapus akun yang sedang dipakai login." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const db = getDb();
+    const [deleted] = await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .returning({ id: users.id, username: users.username });
+
+    if (!deleted) {
+      return NextResponse.json({ error: "User tidak ditemukan." }, { status: 404 });
+    }
+
+    return NextResponse.json({ deletedId: deleted.id, username: deleted.username });
+  } catch (err) {
+    console.error("Delete user error:", err);
+    return NextResponse.json({ error: "Gagal menghapus user." }, { status: 500 });
   }
 }

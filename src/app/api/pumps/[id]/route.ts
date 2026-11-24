@@ -20,6 +20,7 @@ import {
 import { requireApiSession } from "@/lib/auth";
 import { isPumpLocationAssigned } from "@/lib/pump-location";
 import { getMonthBounds } from "@/lib/queries/operating-hours";
+import { getStorageProvider } from "@/lib/storage";
 
 const updatePumpSchema = z.object({
   pumpCode: z.string().min(2).max(40).optional(),
@@ -230,6 +231,10 @@ export async function PATCH(
   if (parsed.data.engineBrandId !== undefined) updates.engineBrandId = parsed.data.engineBrandId;
   if (parsed.data.isActive !== undefined) updates.isActive = parsed.data.isActive;
 
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ error: "Tidak ada data pembaruan pompa." }, { status: 400 });
+  }
+
   const db = getDb();
   try {
     const [updated] = await db
@@ -242,4 +247,59 @@ export async function PATCH(
   } catch {
     return NextResponse.json({ error: "Kode pompa bentrok dengan data lain." }, { status: 409 });
   }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const auth = await requireApiSession("admin");
+  if ("error" in auth) return auth.error;
+
+  const { id } = await context.params;
+  const pumpId = Number(id);
+  if (!Number.isInteger(pumpId) || pumpId <= 0) {
+    return NextResponse.json({ error: "ID pompa tidak valid." }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [existing] = await db
+    .select({ id: pumps.id, pumpCode: pumps.pumpCode })
+    .from(pumps)
+    .where(eq(pumps.id, pumpId))
+    .limit(1);
+
+  if (!existing) {
+    return NextResponse.json({ error: "Pompa tidak ditemukan." }, { status: 404 });
+  }
+
+  const inspRows = await db
+    .select({ id: inspections.id })
+    .from(inspections)
+    .where(eq(inspections.pumpId, pumpId));
+  const inspIds = inspRows.map((r) => r.id);
+
+  const photoRows =
+    inspIds.length > 0
+      ? await db
+          .select({
+            storageProvider: inspectionPhotos.storageProvider,
+            storageKey: inspectionPhotos.storageKey,
+          })
+          .from(inspectionPhotos)
+          .where(inArray(inspectionPhotos.inspectionId, inspIds))
+      : [];
+
+  await db.delete(pumps).where(eq(pumps.id, pumpId));
+
+  for (const ph of photoRows) {
+    try {
+      const provider = getStorageProvider(ph.storageProvider === "local" ? "local" : "gdrive");
+      await provider.remove(ph.storageKey);
+    } catch {
+      // Best-effort storage cleanup; database row is already deleted.
+    }
+  }
+
+  return NextResponse.json({ deletedId: pumpId, pumpCode: existing.pumpCode });
 }

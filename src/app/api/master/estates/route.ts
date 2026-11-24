@@ -1,45 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
-import { eq } from "drizzle-orm";
-import { z } from "zod";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { estates } from "@/db/schema";
+import { blocks, estates, pumps } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import {
+  deleteByIdSchema,
+  estateBatchOrdersSchema,
+  estateCreateSchema,
+  estatePatchSchema,
+  extractDeleteId,
+} from "@/lib/master-validation";
 import { MASTER_TREE_TAG } from "@/lib/queries/master";
-
-const createSchema = z.object({
-  regionId: z.number().int().positive(),
-  code: z.string().min(2).max(20),
-  name: z.string().min(2).max(120),
-  sortOrder: z.number().int().min(0).max(9999).optional(),
-});
-
-const patchSchema = z.object({
-  id: z.number().int().positive(),
-  regionId: z.number().int().positive().optional(),
-  code: z.string().min(2).max(20).optional(),
-  name: z.string().min(2).max(120).optional(),
-  sortOrder: z.number().int().min(0).max(9999).optional(),
-  isActive: z.boolean().optional(),
-});
-
-const batchOrdersSchema = z.object({
-  orders: z
-    .array(
-      z.object({
-        id: z.number().int().positive(),
-        sortOrder: z.number().int().min(0).max(9999),
-      })
-    )
-    .min(1),
-});
 
 export async function POST(request: NextRequest) {
   const auth = await requireApiSession("admin");
   if ("error" in auth) return auth.error;
 
   const body = await request.json();
-  const parsed = createSchema.safeParse(body);
+  const parsed = estateCreateSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Data Estate tidak valid." }, { status: 400 });
   }
@@ -69,7 +48,7 @@ export async function PATCH(request: NextRequest) {
   const body = await request.json();
 
   if (body && typeof body === "object" && "orders" in body) {
-    const batchParsed = batchOrdersSchema.safeParse(body);
+    const batchParsed = estateBatchOrdersSchema.safeParse(body);
     if (!batchParsed.success) {
       return NextResponse.json({ error: "Data urutan Estate tidak valid." }, { status: 400 });
     }
@@ -85,12 +64,11 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ updatedCount: batchParsed.data.orders.length });
   }
 
-  const parsed = patchSchema.safeParse(body);
+  const parsed = estatePatchSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Data pembaruan Estate tidak valid." }, { status: 400 });
   }
 
-  const db = getDb();
   const updates: Record<string, unknown> = {};
   if (parsed.data.regionId !== undefined) updates.regionId = parsed.data.regionId;
   if (parsed.data.code !== undefined) updates.code = parsed.data.code.trim().toUpperCase();
@@ -102,6 +80,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Tidak ada data Estate yang diperbarui." }, { status: 400 });
   }
 
+  const db = getDb();
   try {
     const [updated] = await db
       .update(estates)
@@ -112,6 +91,56 @@ export async function PATCH(request: NextRequest) {
     revalidateTag(MASTER_TREE_TAG);
     return NextResponse.json({ item: updated });
   } catch {
-    return NextResponse.json({ error: "Kode Estate bentrok pada Region yang dipilih." }, { status: 409 });
+    return NextResponse.json(
+      { error: "Kode Estate bentrok pada Region yang dipilih." },
+      { status: 409 }
+    );
   }
+}
+
+export async function DELETE(request: NextRequest) {
+  const auth = await requireApiSession("admin");
+  if ("error" in auth) return auth.error;
+
+  const rawId = await extractDeleteId(request);
+  const parsed = deleteByIdSchema.safeParse({ id: rawId });
+  if (!parsed.success) {
+    return NextResponse.json({ error: "ID Estate tidak valid." }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [[{ blockCount }], [{ pumpCount }]] = await Promise.all([
+    db
+      .select({ blockCount: sql<number>`count(*)::int` })
+      .from(blocks)
+      .where(eq(blocks.estateId, parsed.data.id)),
+    db
+      .select({ pumpCount: sql<number>`count(*)::int` })
+      .from(pumps)
+      .where(eq(pumps.estateId, parsed.data.id)),
+  ]);
+
+  if (blockCount > 0 || pumpCount > 0) {
+    const refs: string[] = [];
+    if (blockCount > 0) refs.push(`${blockCount} Block`);
+    if (pumpCount > 0) refs.push(`${pumpCount} unit Pompa`);
+    return NextResponse.json(
+      {
+        error: `Estate tidak dapat dihapus karena masih dipakai oleh ${refs.join(" dan ")}. Hapus/pindahkan data terkait terlebih dahulu atau gunakan Nonaktifkan.`,
+      },
+      { status: 409 }
+    );
+  }
+
+  const [deleted] = await db
+    .delete(estates)
+    .where(eq(estates.id, parsed.data.id))
+    .returning({ id: estates.id });
+
+  if (!deleted) {
+    return NextResponse.json({ error: "Estate tidak ditemukan." }, { status: 404 });
+  }
+
+  revalidateTag(MASTER_TREE_TAG);
+  return NextResponse.json({ deletedId: deleted.id });
 }

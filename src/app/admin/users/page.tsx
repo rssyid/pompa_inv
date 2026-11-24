@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import { ErrorState, LoadingState } from "@/components/UiStates";
 import { fetchJson } from "@/lib/client-fetch";
 
@@ -33,6 +35,14 @@ export default function AdminUsersPage() {
   const [resetUserId, setResetUserId] = useState<number | null>(null);
   const [resetPassword, setResetPassword] = useState("");
 
+  const [editingUser, setEditingUser] = useState<UserRow | null>(null);
+  const [editUserName, setEditUserName] = useState("");
+  const [editUserRole, setEditUserRole] = useState<"admin" | "petugas">("petugas");
+  const [editUserEstateId, setEditUserEstateId] = useState("");
+  const [editUserSaving, setEditUserSaving] = useState(false);
+  const [editUserError, setEditUserError] = useState<string | null>(null);
+  const [deletingUser, setDeletingUser] = useState<UserRow | null>(null);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -52,6 +62,50 @@ export default function AdminUsersPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!editingUser) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !editUserSaving) {
+        setEditingUser(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editUserSaving, editingUser]);
+
+  function openEditUser(u: UserRow) {
+    setEditUserName(u.name);
+    setEditUserRole(u.role);
+    setEditUserEstateId(u.defaultEstateId ? String(u.defaultEstateId) : "");
+    setEditUserError(null);
+    setEditingUser(u);
+  }
+
+  async function handleSaveEditUser(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingUser) return;
+    setEditUserSaving(true);
+    setEditUserError(null);
+    try {
+      await fetchJson(`/api/users/${editingUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editUserName.trim(),
+          role: editUserRole,
+          defaultEstateId: editUserEstateId ? Number(editUserEstateId) : null,
+        }),
+      });
+      setNotice(`Data user "${editingUser.username}" berhasil diperbarui.`);
+      setEditingUser(null);
+      await loadData();
+    } catch (err) {
+      setEditUserError(err instanceof Error ? err.message : "Gagal memperbarui data user.");
+    } finally {
+      setEditUserSaving(false);
+    }
+  }
 
   async function handleCreateUser(e: React.FormEvent) {
     e.preventDefault();
@@ -278,7 +332,14 @@ export default function AdminUsersPage() {
                       {u.isActive ? "Aktif" : "Nonaktif"}
                     </td>
                     <td className="px-3 py-2.5 text-right">
-                      <div className="inline-flex items-center gap-2">
+                      <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openEditUser(u)}
+                          className="min-h-[44px] rounded border border-field-border bg-white px-3 text-xs font-semibold text-field-ink hover:bg-field-bg"
+                        >
+                          Edit
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -290,19 +351,28 @@ export default function AdminUsersPage() {
                           Reset Sandi
                         </button>
                         {u.id !== me.userId && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateUser(
-                                u.id,
-                                { isActive: !u.isActive },
-                                `Status akun ${u.username} diperbarui.`
-                              )
-                            }
-                            className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
-                          >
-                            {u.isActive ? "Nonaktifkan" : "Aktifkan"}
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateUser(
+                                  u.id,
+                                  { isActive: !u.isActive },
+                                  `Status akun ${u.username} diperbarui.`
+                                )
+                              }
+                              className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
+                            >
+                              {u.isActive ? "Nonaktifkan" : "Aktifkan"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeletingUser(u)}
+                              className="min-h-[44px] rounded border border-[#FCA5A5] bg-[#FEF2F2] px-3 text-xs font-semibold text-[#991B1B] hover:bg-[#FEE2E2]"
+                            >
+                              Hapus
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -367,6 +437,141 @@ export default function AdminUsersPage() {
               </div>
             </form>
           </div>
+        )}
+
+        {editingUser && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-user-title"
+            onClick={() => {
+              if (!editUserSaving) setEditingUser(null);
+            }}
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[92vh] w-full overflow-y-auto rounded-t-xl border border-field-border bg-field-surface shadow-xl sm:max-w-md sm:rounded-xl"
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-field-border px-4 py-3.5 sm:px-5">
+                <div>
+                  <p className="text-xs font-semibold text-field-muted">Kelola User</p>
+                  <h3 id="edit-user-title" className="text-base font-bold text-field-ink">
+                    Edit Akun {editingUser.username}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingUser(null)}
+                  disabled={editUserSaving}
+                  aria-label="Tutup dialog edit user"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-field-border bg-field-bg text-field-ink hover:bg-[#EAEFEA]"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEditUser} className="space-y-4 p-4 sm:p-5">
+                {editUserError && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-[#FCA5A5] bg-[#FEE2E2] px-3 py-2 text-xs font-semibold text-[#991B1B]"
+                  >
+                    {editUserError}
+                  </div>
+                )}
+
+                <div>
+                  <label
+                    htmlFor="edit-user-name"
+                    className="mb-1 block text-xs font-semibold text-field-muted"
+                  >
+                    Nama Lengkap
+                  </label>
+                  <input
+                    id="edit-user-name"
+                    required
+                    minLength={2}
+                    value={editUserName}
+                    onChange={(e) => setEditUserName(e.target.value)}
+                    className="min-h-[44px] w-full rounded-md border border-field-border px-3 text-sm text-field-ink"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="edit-user-role"
+                    className="mb-1 block text-xs font-semibold text-field-muted"
+                  >
+                    Role
+                  </label>
+                  <select
+                    id="edit-user-role"
+                    value={editUserRole}
+                    onChange={(e) => setEditUserRole(e.target.value as "admin" | "petugas")}
+                    className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                  >
+                    <option value="petugas">Petugas Lapangan</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="edit-user-estate"
+                    className="mb-1 block text-xs font-semibold text-field-muted"
+                  >
+                    Estate Tugas (Opsional)
+                  </label>
+                  <select
+                    id="edit-user-estate"
+                    value={editUserEstateId}
+                    onChange={(e) => setEditUserEstateId(e.target.value)}
+                    className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                  >
+                    <option value="">Semua Estate</option>
+                    {master.estates.map((es) => (
+                      <option key={es.id} value={String(es.id)}>
+                        {es.code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setEditingUser(null)}
+                    disabled={editUserSaving}
+                    className="min-h-[44px] rounded-md border border-field-border bg-field-bg px-4 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editUserSaving}
+                    className="min-h-[44px] rounded-md bg-field-accent px-5 text-sm font-semibold text-white hover:bg-field-accent-hover disabled:opacity-60"
+                  >
+                    {editUserSaving ? "Menyimpan..." : "Simpan Perubahan"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {deletingUser && (
+          <ConfirmDeleteDialog
+            title={`Hapus Akun ${deletingUser.username}`}
+            description={`Hapus permanen akun "${deletingUser.name}" (${deletingUser.username})? Catatan pemeriksaan dan log jam operasional yang pernah dibuat tetap tersimpan.`}
+            onClose={() => setDeletingUser(null)}
+            onConfirm={async () => {
+              await fetchJson(`/api/users/${deletingUser.id}`, { method: "DELETE" });
+              setError(null);
+              setNotice(`Akun "${deletingUser.username}" berhasil dihapus.`);
+              await loadData();
+            }}
+          />
         )}
       </div>
     </AppShell>

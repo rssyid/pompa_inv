@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import { PumpLocationDialog } from "@/components/PumpLocationDialog";
 import { UnitStatusBadge } from "@/components/StatusBadge";
 import { ErrorState, LoadingState } from "@/components/UiStates";
@@ -13,6 +15,13 @@ export default function AdminPumpsPage() {
   const { user, master, ensureLoaded, refreshMaster, error: bootError } = useAppData();
   const [pumps, setPumps] = useState<EnrichedPump[]>([]);
   const [editingPump, setEditingPump] = useState<EnrichedPump | null>(null);
+  const [editingIdentityPump, setEditingIdentityPump] = useState<EnrichedPump | null>(null);
+  const [editPumpCode, setEditPumpCode] = useState("");
+  const [editPumpTypeId, setEditPumpTypeId] = useState("");
+  const [editEngineBrandId, setEditEngineBrandId] = useState("");
+  const [editPumpSaving, setEditPumpSaving] = useState(false);
+  const [editPumpError, setEditPumpError] = useState<string | null>(null);
+  const [deletingPump, setDeletingPump] = useState<EnrichedPump | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +79,50 @@ export default function AdminPumpsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!editingIdentityPump) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !editPumpSaving) {
+        setEditingIdentityPump(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editPumpSaving, editingIdentityPump]);
+
+  function openEditIdentity(pump: EnrichedPump) {
+    setEditPumpCode(pump.pumpCode);
+    setEditPumpTypeId(String(pump.pumpTypeId));
+    setEditEngineBrandId(String(pump.engineBrandId));
+    setEditPumpError(null);
+    setEditingIdentityPump(pump);
+  }
+
+  async function handleSaveIdentity(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingIdentityPump) return;
+    setEditPumpSaving(true);
+    setEditPumpError(null);
+    try {
+      await fetchJson(`/api/pumps/${editingIdentityPump.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pumpCode: editPumpCode.trim().toUpperCase(),
+          pumpTypeId: Number(editPumpTypeId),
+          engineBrandId: Number(editEngineBrandId),
+        }),
+      });
+      setNotice(`Identitas pompa ${editPumpCode.trim().toUpperCase()} berhasil diperbarui.`);
+      setEditingIdentityPump(null);
+      await loadData();
+    } catch (err) {
+      setEditPumpError(err instanceof Error ? err.message : "Gagal memperbarui unit pompa.");
+    } finally {
+      setEditPumpSaving(false);
+    }
+  }
 
   async function handleCreatePump(e: React.FormEvent) {
     e.preventDefault();
@@ -359,7 +412,14 @@ export default function AdminPumpsPage() {
                         <UnitStatusBadge status={p.currentUnitStatus} />
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        <div className="inline-flex items-center gap-1.5">
+                        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openEditIdentity(p)}
+                            className="min-h-[44px] rounded border border-field-border bg-white px-3 text-xs font-semibold text-field-ink hover:bg-field-bg"
+                          >
+                            Edit Unit
+                          </button>
                           <button
                             type="button"
                             onClick={() => setEditingPump(p)}
@@ -373,6 +433,13 @@ export default function AdminPumpsPage() {
                             className="min-h-[44px] rounded border border-field-border bg-field-bg px-3 text-xs font-semibold"
                           >
                             {p.isActive ? "Aktif (Nonaktifkan)" : "Nonaktif (Aktifkan)"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingPump(p)}
+                            className="min-h-[44px] rounded border border-[#FCA5A5] bg-[#FEF2F2] px-3 text-xs font-semibold text-[#991B1B] hover:bg-[#FEE2E2]"
+                          >
+                            Hapus
                           </button>
                         </div>
                       </td>
@@ -397,6 +464,144 @@ export default function AdminPumpsPage() {
             }
             await loadData();
             setNotice(`Lokasi dan info operasional ${editingPump.pumpCode} diperbarui.`);
+          }}
+        />
+      )}
+
+      {editingIdentityPump && master && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-pump-identity-title"
+          onClick={() => {
+            if (!editPumpSaving) setEditingIdentityPump(null);
+          }}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[92vh] w-full overflow-y-auto rounded-t-xl border border-field-border bg-field-surface shadow-xl sm:max-w-md sm:rounded-xl"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-field-border px-4 py-3.5 sm:px-5">
+              <div>
+                <p className="text-xs font-semibold text-field-muted">Kelola Master Pompa</p>
+                <h2 id="edit-pump-identity-title" className="text-base font-bold text-field-ink">
+                  Edit Identitas Unit {editingIdentityPump.pumpCode}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingIdentityPump(null)}
+                disabled={editPumpSaving}
+                aria-label="Tutup dialog edit pompa"
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-field-border bg-field-bg text-field-ink hover:bg-[#EAEFEA]"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveIdentity} className="space-y-4 p-4 sm:p-5">
+              {editPumpError && (
+                <div
+                  role="alert"
+                  className="rounded-md border border-[#FCA5A5] bg-[#FEE2E2] px-3 py-2 text-xs font-semibold text-[#991B1B]"
+                >
+                  {editPumpError}
+                </div>
+              )}
+
+              <div>
+                <label
+                  htmlFor="edit-pump-code"
+                  className="mb-1 block text-xs font-semibold text-field-muted"
+                >
+                  Kode Pompa
+                </label>
+                <input
+                  id="edit-pump-code"
+                  required
+                  value={editPumpCode}
+                  onChange={(e) => setEditPumpCode(e.target.value)}
+                  className="min-h-[44px] w-full rounded-md border border-field-border px-3 font-mono text-sm text-field-ink"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="edit-pump-type"
+                  className="mb-1 block text-xs font-semibold text-field-muted"
+                >
+                  Jenis Pompa
+                </label>
+                <select
+                  id="edit-pump-type"
+                  required
+                  value={editPumpTypeId}
+                  onChange={(e) => setEditPumpTypeId(e.target.value)}
+                  className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                >
+                  {master.pumpTypes.map((pt) => (
+                    <option key={pt.id} value={String(pt.id)}>
+                      {pt.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="edit-pump-engine"
+                  className="mb-1 block text-xs font-semibold text-field-muted"
+                >
+                  Merek Mesin
+                </label>
+                <select
+                  id="edit-pump-engine"
+                  required
+                  value={editEngineBrandId}
+                  onChange={(e) => setEditEngineBrandId(e.target.value)}
+                  className="min-h-[44px] w-full rounded-md border border-field-border bg-white px-3 text-sm text-field-ink"
+                >
+                  {master.engineBrands.map((eb) => (
+                    <option key={eb.id} value={String(eb.id)}>
+                      {eb.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setEditingIdentityPump(null)}
+                  disabled={editPumpSaving}
+                  className="min-h-[44px] rounded-md border border-field-border bg-field-bg px-4 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={editPumpSaving}
+                  className="min-h-[44px] rounded-md bg-field-accent px-5 text-sm font-semibold text-white hover:bg-field-accent-hover disabled:opacity-60"
+                >
+                  {editPumpSaving ? "Menyimpan..." : "Simpan Perubahan"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deletingPump && (
+        <ConfirmDeleteDialog
+          title={`Hapus Pompa ${deletingPump.pumpCode}`}
+          description={`Hapus pompa ${deletingPump.pumpCode} beserta seluruh riwayat pemeriksaan, foto, dan log jam kerjanya? Tindakan ini tidak dapat dibatalkan.`}
+          onClose={() => setDeletingPump(null)}
+          onConfirm={async () => {
+            await fetchJson(`/api/pumps/${deletingPump.id}`, { method: "DELETE" });
+            setError(null);
+            setNotice(`Pompa ${deletingPump.pumpCode} berhasil dihapus permanen.`);
+            await loadData();
           }}
         />
       )}
