@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getDb } from "@/db";
 import { blocks, pumps } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
+import { getMonthBoundsFromDate, getTodayIsoDate } from "@/lib/pump-insights";
 import { queryFilteredPumps } from "@/lib/queries/pumps";
 
 const createPumpSchema = z.object({
@@ -26,6 +27,10 @@ export async function GET(request: NextRequest) {
   if ("error" in auth) return auth.error;
 
   const sp = request.nextUrl.searchParams;
+  const includeInsights = sp.get("includeInsights") === "true";
+  const referenceDate = includeInsights ? getTodayIsoDate() : undefined;
+  const monthBounds = referenceDate ? getMonthBoundsFromDate(referenceDate) : undefined;
+
   const rows = await queryFilteredPumps({
     companyId: Number(sp.get("companyId")) || undefined,
     regionId: Number(sp.get("regionId")) || undefined,
@@ -35,7 +40,18 @@ export async function GET(request: NextRequest) {
     status: sp.get("status") ?? undefined,
     search: sp.get("search") ?? undefined,
     includeInactive: sp.get("includeInactive") === "true" && auth.user.role === "admin",
+    includeInsights,
+    insightsMonthStart: monthBounds?.monthStart,
+    insightsMonthEnd: monthBounds?.monthEnd,
   });
+
+  if (includeInsights && monthBounds && referenceDate) {
+    return NextResponse.json({
+      pumps: rows,
+      monthLabel: monthBounds.monthLabel,
+      referenceDate,
+    });
+  }
 
   return NextResponse.json({ pumps: rows });
 }

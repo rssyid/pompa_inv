@@ -2,6 +2,14 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { inspectionItems, issuePresets } from "@/db/schema";
 import { isPumpLocationAssigned } from "@/lib/pump-location";
+import { getMonthBoundsFromDate, getTodayIsoDate } from "@/lib/pump-insights";
+import type { PumpIssueSummary } from "@/lib/client-fetch";
+
+function parseIssueList(value: unknown): PumpIssueSummary[] {
+  if (!value) return [];
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  return Array.isArray(parsed) ? (parsed as PumpIssueSummary[]) : [];
+}
 
 export interface PumpFilterParams {
   companyId?: number;
@@ -12,6 +20,9 @@ export interface PumpFilterParams {
   status?: string;
   search?: string;
   includeInactive?: boolean;
+  includeInsights?: boolean;
+  insightsMonthStart?: string;
+  insightsMonthEnd?: string;
 }
 
 export interface EnrichedPumpRow {
@@ -50,6 +61,9 @@ export interface EnrichedPumpRow {
   isPreOrder: boolean;
   breakdownStartDate: string | null;
   locationUpdatedAt: Date | null;
+  latestIssues?: PumpIssueSummary[];
+  monthTotalHours?: number;
+  lastOperatingDate?: string | null;
 }
 
 export async function queryFilteredPumps(filters: PumpFilterParams): Promise<EnrichedPumpRow[]> {
@@ -78,6 +92,78 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
     whereClauses.length > 0
       ? sql`WHERE ${sql.join(whereClauses, sql` AND `)}`
       : sql``;
+
+  const insightCtesSql = filters.includeInsights
+    ? (() => {
+        const fallbackBounds = getMonthBoundsFromDate(getTodayIsoDate());
+        const monthStart = filters.insightsMonthStart || fallbackBounds.monthStart;
+        const monthEnd = filters.insightsMonthEnd || fallbackBounds.monthEnd;
+        return sql`,
+    latest_issue_items AS (
+      SELECT
+        ii.inspection_id,
+        json_agg(
+          json_build_object(
+            'partName', ii.part_name,
+            'sectionName', ii.section_name,
+            'availability', ii.availability,
+            'condition', ii.condition,
+            'issueLabel', COALESCE(
+              ipr.label,
+              CASE
+                WHEN ii.availability = 'hilang' THEN 'Hilang'
+                WHEN ii.availability = 'tidak_lengkap' THEN 'Tidak Lengkap'
+                ELSE 'Rusak'
+              END
+            ),
+            'notes', ii.notes
+          )
+          ORDER BY ii.sort_order ASC, ii.id ASC
+        ) AS "latestIssues"
+      FROM inspection_items ii
+      INNER JOIN latest_inspections li ON li.id = ii.inspection_id
+      LEFT JOIN issue_presets ipr ON ii.issue_preset_id = ipr.id
+      WHERE ii.availability <> 'ada' OR ii.condition = 'rusak'
+      GROUP BY ii.inspection_id
+    ),
+    month_operating_hours AS (
+      SELECT
+        pol.pump_id,
+        ROUND(SUM(pol.operating_hours)::numeric, 2)::float8 AS "monthTotalHours"
+      FROM pump_operating_logs pol
+      INNER JOIN filtered_pumps fp ON fp.id = pol.pump_id
+      WHERE pol.day_status = 'operasi'
+        AND pol.operating_hours > 0
+        AND pol.log_date >= ${monthStart}::date
+        AND pol.log_date <= ${monthEnd}::date
+      GROUP BY pol.pump_id
+    ),
+    last_operating_log AS (
+      SELECT
+        pol.pump_id,
+        MAX(pol.log_date)::text AS "lastOperatingDate"
+      FROM pump_operating_logs pol
+      INNER JOIN filtered_pumps fp ON fp.id = pol.pump_id
+      WHERE pol.day_status = 'operasi'
+        AND pol.operating_hours > 0
+      GROUP BY pol.pump_id
+    )`;
+      })()
+    : sql``;
+
+  const insightSelectSql = filters.includeInsights
+    ? sql`,
+      COALESCE(lii."latestIssues", '[]'::json) AS "latestIssues",
+      COALESCE(moh."monthTotalHours", 0)::float8 AS "monthTotalHours",
+      lol."lastOperatingDate" AS "lastOperatingDate"`
+    : sql``;
+
+  const insightJoinSql = filters.includeInsights
+    ? sql`
+    LEFT JOIN latest_issue_items lii ON lii.inspection_id = li.id
+    LEFT JOIN month_operating_hours moh ON moh.pump_id = fp.id
+    LEFT JOIN last_operating_log lol ON lol.pump_id = fp.id`
+    : sql``;
 
   const result = await db.execute(sql`
     WITH filtered_pumps AS (
@@ -146,18 +232,18 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
       FROM inspection_photos ip
       INNER JOIN latest_inspections li ON li.id = ip.inspection_id
       GROUP BY ip.inspection_id
-    )
+    )${insightCtesSql}
     SELECT
       fp.*,
       li.id AS "latestInspectionId",
       li."inspectedAt" AS "latestInspectedDate",
       li."inspectorName" AS "latestInspectorName",
       COALESCE(ic."issueCount", 0)::int AS "issueCount",
-      COALESCE(pc."photoCount", 0)::int AS "photoCount"
+      COALESCE(pc."photoCount", 0)::int AS "photoCount"${insightSelectSql}
     FROM filtered_pumps fp
     LEFT JOIN latest_inspections li ON li.pump_id = fp.id
     LEFT JOIN issue_counts ic ON ic.inspection_id = li.id
-    LEFT JOIN photo_counts pc ON pc.inspection_id = li.id
+    LEFT JOIN photo_counts pc ON pc.inspection_id = li.id${insightJoinSql}
     ORDER BY
       CASE
         WHEN fp."estateId" IS NULL THEN 2
@@ -183,6 +269,13 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
       blockId: row.blockId,
       blockCode: row.blockCode,
     }),
+    ...(filters.includeInsights
+      ? {
+          latestIssues: parseIssueList(row.latestIssues),
+          monthTotalHours: Math.round(Number(row.monthTotalHours ?? 0) * 100) / 100,
+          lastOperatingDate: row.lastOperatingDate ?? null,
+        }
+      : {}),
   }));
 }
 

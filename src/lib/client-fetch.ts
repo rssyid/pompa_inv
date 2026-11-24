@@ -11,6 +11,15 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
   return data as T;
 }
 
+export interface PumpIssueSummary {
+  partName: string;
+  sectionName: string;
+  availability: string;
+  condition: string;
+  issueLabel: string;
+  notes: string | null;
+}
+
 export interface EnrichedPump {
   id: number;
   pumpCode: string;
@@ -47,4 +56,8 @@ export interface EnrichedPump {
   isPreOrder: boolean;
   breakdownStartDate: string | null;
   locationUpdatedAt: string | null;
+  // Only present when /api/pumps is called with includeInsights=true.
+  latestIssues?: PumpIssueSummary[];
+  monthTotalHours?: number;
+  lastOperatingDate?: string | null;
 }
