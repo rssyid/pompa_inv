@@ -44,6 +44,7 @@ export const estates = pgTable(
       .references(() => regions.id, { onDelete: "restrict" }),
     code: text("code").notNull(),
     name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },

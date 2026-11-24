@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { unstable_cache } from "next/cache";
 import { getDb } from "@/db";
 import {
@@ -11,11 +11,17 @@ import {
   pumpTypes,
   regions,
 } from "@/db/schema";
+import { compareEstateOrder } from "@/lib/estate-order";
 
 export const MASTER_TREE_TAG = "master-tree";
 
 async function fetchMasterTreeFromDb(includeInactive: boolean, includeParts: boolean) {
   const db = getDb();
+  const estateOrderBy = [
+    sql`CASE WHEN ${estates.sortOrder} > 0 THEN 0 ELSE 1 END ASC`,
+    asc(estates.sortOrder),
+    asc(estates.code),
+  ];
 
   const [
     companyRows,
@@ -34,8 +40,12 @@ async function fetchMasterTreeFromDb(includeInactive: boolean, includeParts: boo
       ? db.select().from(regions).orderBy(asc(regions.name))
       : db.select().from(regions).where(eq(regions.isActive, true)).orderBy(asc(regions.name)),
     includeInactive
-      ? db.select().from(estates).orderBy(asc(estates.code))
-      : db.select().from(estates).where(eq(estates.isActive, true)).orderBy(asc(estates.code)),
+      ? db.select().from(estates).orderBy(...estateOrderBy)
+      : db
+          .select()
+          .from(estates)
+          .where(eq(estates.isActive, true))
+          .orderBy(...estateOrderBy),
     includeInactive
       ? db.select().from(blocks).orderBy(asc(blocks.code))
       : db.select().from(blocks).where(eq(blocks.isActive, true)).orderBy(asc(blocks.code)),
@@ -67,11 +77,24 @@ async function fetchMasterTreeFromDb(includeInactive: boolean, includeParts: boo
           .orderBy(asc(issuePresets.sortOrder)),
   ]);
 
+  const estateById = new Map(estateRows.map((es) => [es.id, es]));
+  const sortedBlocks = [...blockRows].sort((a, b) => {
+    const estA = estateById.get(a.estateId);
+    const estB = estateById.get(b.estateId);
+    if (estA && estB) {
+      const estDiff = compareEstateOrder(estA, estB);
+      if (estDiff !== 0) return estDiff;
+    } else if (estA !== estB) {
+      return estA ? -1 : 1;
+    }
+    return a.code.localeCompare(b.code);
+  });
+
   return {
     companies: companyRows,
     regions: regionRows,
     estates: estateRows,
-    blocks: blockRows,
+    blocks: sortedBlocks,
     pumpTypes: pumpTypeRows,
     pumpTypeParts: partRows,
     engineBrands: engineBrandRows,

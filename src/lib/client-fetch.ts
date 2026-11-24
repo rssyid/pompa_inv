@@ -23,6 +23,7 @@ export interface EnrichedPump {
   estateId: number | null;
   estateCode: string | null;
   estateName: string | null;
+  estateSortOrder?: number | null;
   regionId: number | null;
   regionCode: string | null;
   regionName: string | null;

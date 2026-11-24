@@ -77,7 +77,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const refreshMaster = useCallback(async () => {
     try {
-      const treeRes = await fetchJson<MasterTreeData>("/api/master/tree?includeParts=false");
+      const treeRes = await fetchJson<MasterTreeData>("/api/master/tree?includeParts=false", {
+        cache: "no-store",
+      });
       masterRef.current = treeRes;
       setMaster(treeRes);
     } catch {

@@ -36,6 +36,8 @@ export default function AdminMasterPage() {
   const [estRegionId, setEstRegionId] = useState("");
   const [estCode, setEstCode] = useState("");
   const [estName, setEstName] = useState("");
+  const [estSortOrder, setEstSortOrder] = useState("");
+  const [estateOrderDrafts, setEstateOrderDrafts] = useState<Record<number, string>>({});
 
   const [blkEstateId, setBlkEstateId] = useState("");
   const [blkCode, setBlkCode] = useState("");
@@ -62,9 +64,17 @@ export default function AdminMasterPage() {
     try {
       const [, treeRes] = await Promise.all([
         ensureLoaded(),
-        fetchJson<MasterTreeData>("/api/master/tree?includeInactive=true"),
+        fetchJson<MasterTreeData>("/api/master/tree?includeInactive=true", {
+          cache: "no-store",
+        }),
       ]);
       setMaster(treeRes);
+
+      const nextDrafts: Record<number, string> = {};
+      for (const es of treeRes.estates) {
+        nextDrafts[es.id] = String(es.sortOrder ?? 0);
+      }
+      setEstateOrderDrafts(nextDrafts);
 
       if (!regCompanyId && treeRes.companies[0]) {
         setRegCompanyId(String(treeRes.companies[0].id));
@@ -140,6 +150,35 @@ export default function AdminMasterPage() {
 
   const activeParts =
     master?.pumpTypeParts.filter((p) => String(p.pumpTypeId) === selectedPumpTypeId) ?? [];
+
+  const dirtyEstateOrders = (master?.estates ?? []).filter((es) => {
+    const draftVal = estateOrderDrafts[es.id];
+    if (draftVal === undefined) return false;
+    const normalized = draftVal.trim() === "" ? "0" : draftVal.trim();
+    return normalized !== String(es.sortOrder ?? 0);
+  });
+
+  async function handleSaveEstateOrders() {
+    if (dirtyEstateOrders.length === 0) return;
+    const orders: Array<{ id: number; sortOrder: number }> = [];
+    for (const es of dirtyEstateOrders) {
+      const raw = (estateOrderDrafts[es.id] ?? "").trim();
+      const num = raw === "" ? 0 : Number(raw);
+      if (!Number.isInteger(num) || num < 0 || num > 9999) {
+        setError(
+          `Nomor urut untuk Estate ${es.code} harus bilangan bulat antara 0 sampai 9999.`
+        );
+        return;
+      }
+      orders.push({ id: es.id, sortOrder: num });
+    }
+    await mutate(
+      "/api/master/estates",
+      "PATCH",
+      { orders },
+      "Urutan Estate berhasil diperbarui."
+    );
+  }
 
   return (
     <AppShell
@@ -399,21 +438,47 @@ export default function AdminMasterPage() {
 
         {master && tab === "estate" && (
           <section className="space-y-4 rounded-lg border border-field-border bg-field-surface p-4">
-            <h2 className="text-base font-bold text-field-ink">Daftar Estate</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-field-ink">Daftar Estate</h2>
+                <p className="mt-0.5 text-xs text-field-muted">
+                  Nomor lebih kecil tampil lebih awal di seluruh tabel dan dropdown (0 = di akhir).
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={saving || dirtyEstateOrders.length === 0}
+                onClick={handleSaveEstateOrders}
+                className="min-h-[44px] rounded-md bg-field-accent px-4 text-sm font-semibold text-white hover:bg-field-accent-hover disabled:opacity-50"
+              >
+                {saving ? "Menyimpan..." : `Simpan Urutan (${dirtyEstateOrders.length})`}
+              </button>
+            </div>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                const parsedOrder = estSortOrder.trim() === "" ? 0 : Number(estSortOrder.trim());
+                if (!Number.isInteger(parsedOrder) || parsedOrder < 0 || parsedOrder > 9999) {
+                  setError("Nomor urut Estate harus bilangan bulat antara 0 sampai 9999.");
+                  return;
+                }
                 mutate(
                   "/api/master/estates",
                   "POST",
-                  { regionId: Number(estRegionId), code: estCode, name: estName },
+                  {
+                    regionId: Number(estRegionId),
+                    code: estCode,
+                    name: estName,
+                    sortOrder: parsedOrder,
+                  },
                   "Estate berhasil ditambahkan."
                 ).then(() => {
                   setEstCode("");
                   setEstName("");
+                  setEstSortOrder("");
                 });
               }}
-              className="grid grid-cols-1 gap-3 sm:grid-cols-4"
+              className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5"
             >
               <div>
                 <label htmlFor="est-reg" className="mb-1 block text-xs font-semibold text-field-muted">
@@ -459,6 +524,23 @@ export default function AdminMasterPage() {
                   className="min-h-[44px] w-full rounded-md border border-field-border px-3 text-sm"
                 />
               </div>
+              <div>
+                <label htmlFor="est-sort" className="mb-1 block text-xs font-semibold text-field-muted">
+                  No. Urut
+                </label>
+                <input
+                  id="est-sort"
+                  type="number"
+                  min={0}
+                  max={9999}
+                  step={1}
+                  inputMode="numeric"
+                  value={estSortOrder}
+                  onChange={(e) => setEstSortOrder(e.target.value)}
+                  placeholder="Contoh: 1"
+                  className="min-h-[44px] w-full rounded-md border border-field-border px-3 font-mono text-sm tabular-nums"
+                />
+              </div>
               <div className="flex items-end">
                 <button
                   type="submit"
@@ -471,9 +553,10 @@ export default function AdminMasterPage() {
             </form>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-left text-sm">
+              <table className="w-full min-w-[620px] text-left text-sm">
                 <thead className="border-b border-field-border bg-field-bg text-xs font-semibold text-field-muted">
                   <tr>
+                    <th className="w-28 px-3 py-2.5">No. Urut</th>
                     <th className="px-3 py-2.5">Region</th>
                     <th className="px-3 py-2.5">Kode Estate</th>
                     <th className="px-3 py-2.5">Nama Estate</th>
@@ -484,8 +567,36 @@ export default function AdminMasterPage() {
                 <tbody className="divide-y divide-field-border">
                   {master.estates.map((es) => {
                     const reg = master.regions.find((r) => r.id === es.regionId);
+                    const draftVal = estateOrderDrafts[es.id] ?? String(es.sortOrder ?? 0);
+                    const normalizedDraft = draftVal.trim() === "" ? "0" : draftVal.trim();
+                    const isDirty = normalizedDraft !== String(es.sortOrder ?? 0);
                     return (
-                      <tr key={es.id}>
+                      <tr key={es.id} className={isDirty ? "bg-[#F0FDF4]" : undefined}>
+                        <td className="px-3 py-2.5">
+                          <input
+                            type="number"
+                            min={0}
+                            max={9999}
+                            step={1}
+                            inputMode="numeric"
+                            aria-label={`Nomor urut Estate ${es.code}`}
+                            value={draftVal}
+                            onChange={(e) => {
+                              setNotice(null);
+                              setEstateOrderDrafts((prev) => ({
+                                ...prev,
+                                [es.id]: e.target.value,
+                              }));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void handleSaveEstateOrders();
+                              }
+                            }}
+                            className="min-h-[44px] w-20 rounded-md border border-field-border bg-white px-2.5 text-right font-mono text-sm tabular-nums text-field-ink"
+                          />
+                        </td>
                         <td className="px-3 py-2.5 text-xs text-field-muted">
                           {reg?.name ?? es.regionId}
                         </td>

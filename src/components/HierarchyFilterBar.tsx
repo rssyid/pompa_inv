@@ -20,6 +20,7 @@ export interface MasterEstate {
   regionId: number;
   code: string;
   name: string;
+  sortOrder: number;
   isActive: boolean;
 }
 export interface MasterBlock {

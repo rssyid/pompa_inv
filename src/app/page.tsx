@@ -25,6 +25,7 @@ interface ReportSummaryResponse {
     estateId: number;
     estateCode: string;
     regionName: string;
+    sortOrder?: number;
     total: number;
     aktif: number;
     perluPerbaikan: number;
@@ -122,6 +123,17 @@ export default function DashboardPage() {
 
   const urgentPumps =
     summary?.pumps.filter((p) => p.currentUnitStatus !== "aktif") ?? [];
+
+  const estateTotals = (summary?.byEstate ?? []).reduce(
+    (acc, row) => ({
+      total: acc.total + row.total,
+      aktif: acc.aktif + row.aktif,
+      perluPerbaikan: acc.perluPerbaikan + row.perluPerbaikan,
+      rusakTotal: acc.rusakTotal + row.rusakTotal,
+      issueCount: acc.issueCount + row.issueCount,
+    }),
+    { total: 0, aktif: 0, perluPerbaikan: 0, rusakTotal: 0, issueCount: 0 }
+  );
 
   return (
     <AppShell
@@ -234,6 +246,28 @@ export default function DashboardPage() {
                         </tr>
                       ))}
                     </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-field-border bg-[#EEF2EF] font-bold text-field-ink">
+                        <th scope="row" colSpan={2} className="px-4 py-3 text-left">
+                          Total Keseluruhan
+                        </th>
+                        <td className="px-4 py-3 text-right font-mono tabular-nums">
+                          {estateTotals.total}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono tabular-nums text-[#166534]">
+                          {estateTotals.aktif}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono tabular-nums text-[#92400E]">
+                          {estateTotals.perluPerbaikan}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono tabular-nums text-[#991B1B]">
+                          {estateTotals.rusakTotal}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono tabular-nums">
+                          {estateTotals.issueCount}
+                        </td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
               )}

@@ -347,7 +347,10 @@ export async function queryOperatingHoursMonitoring(
     }
   }
 
-  const regionGroupsMap = new Map<string, MonitoringRegionGroup>();
+  const regionGroupsMap = new Map<
+    string,
+    MonitoringRegionGroup & { minEstateSortOrder: number }
+  >();
 
   for (const p of pumps) {
     const regionKey = p.regionId ? `${p.regionId}` : "unassigned";
@@ -357,7 +360,12 @@ export async function queryOperatingHoursMonitoring(
       regionName: p.regionName ?? "Belum Ditempatkan",
       pumps: [],
       regionTotalHoursMonth: 0,
+      minEstateSortOrder: Number.MAX_SAFE_INTEGER,
     };
+
+    if ((p.estateSortOrder ?? 0) > 0 && (p.estateSortOrder as number) < group.minEstateSortOrder) {
+      group.minEstateSortOrder = p.estateSortOrder as number;
+    }
 
     const logsMap = logsByPump.get(p.id) ?? new Map<string, DailyLogItem>();
     const totalHoursMonth = Math.round((monthTotalByPump.get(p.id) ?? 0) * 100) / 100;
@@ -404,9 +412,20 @@ export async function queryOperatingHoursMonitoring(
     regionGroupsMap.set(regionKey, group);
   }
 
-  const regions = Array.from(regionGroupsMap.values()).sort((a, b) =>
-    a.regionName.localeCompare(b.regionName)
-  );
+  const regions: MonitoringRegionGroup[] = Array.from(regionGroupsMap.values())
+    .sort((a, b) => {
+      if (a.minEstateSortOrder !== b.minEstateSortOrder) {
+        return a.minEstateSortOrder - b.minEstateSortOrder;
+      }
+      return a.regionName.localeCompare(b.regionName);
+    })
+    .map((group) => ({
+      regionId: group.regionId,
+      regionCode: group.regionCode,
+      regionName: group.regionName,
+      pumps: group.pumps,
+      regionTotalHoursMonth: group.regionTotalHoursMonth,
+    }));
   const grandTotalHoursMonth =
     Math.round(regions.reduce((acc, g) => acc + g.regionTotalHoursMonth, 0) * 100) / 100;
 

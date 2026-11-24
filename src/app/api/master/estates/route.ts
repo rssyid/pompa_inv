@@ -11,6 +11,7 @@ const createSchema = z.object({
   regionId: z.number().int().positive(),
   code: z.string().min(2).max(20),
   name: z.string().min(2).max(120),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
 });
 
 const patchSchema = z.object({
@@ -18,7 +19,19 @@ const patchSchema = z.object({
   regionId: z.number().int().positive().optional(),
   code: z.string().min(2).max(20).optional(),
   name: z.string().min(2).max(120).optional(),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
   isActive: z.boolean().optional(),
+});
+
+const batchOrdersSchema = z.object({
+  orders: z
+    .array(
+      z.object({
+        id: z.number().int().positive(),
+        sortOrder: z.number().int().min(0).max(9999),
+      })
+    )
+    .min(1),
 });
 
 export async function POST(request: NextRequest) {
@@ -39,6 +52,7 @@ export async function POST(request: NextRequest) {
         regionId: parsed.data.regionId,
         code: parsed.data.code.trim().toUpperCase(),
         name: parsed.data.name.trim(),
+        sortOrder: parsed.data.sortOrder ?? 0,
       })
       .returning();
     revalidateTag(MASTER_TREE_TAG);
@@ -53,6 +67,24 @@ export async function PATCH(request: NextRequest) {
   if ("error" in auth) return auth.error;
 
   const body = await request.json();
+
+  if (body && typeof body === "object" && "orders" in body) {
+    const batchParsed = batchOrdersSchema.safeParse(body);
+    if (!batchParsed.success) {
+      return NextResponse.json({ error: "Data urutan Estate tidak valid." }, { status: 400 });
+    }
+
+    const db = getDb();
+    for (const entry of batchParsed.data.orders) {
+      await db
+        .update(estates)
+        .set({ sortOrder: entry.sortOrder })
+        .where(eq(estates.id, entry.id));
+    }
+    revalidateTag(MASTER_TREE_TAG);
+    return NextResponse.json({ updatedCount: batchParsed.data.orders.length });
+  }
+
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Data pembaruan Estate tidak valid." }, { status: 400 });
@@ -63,7 +95,12 @@ export async function PATCH(request: NextRequest) {
   if (parsed.data.regionId !== undefined) updates.regionId = parsed.data.regionId;
   if (parsed.data.code !== undefined) updates.code = parsed.data.code.trim().toUpperCase();
   if (parsed.data.name !== undefined) updates.name = parsed.data.name.trim();
+  if (parsed.data.sortOrder !== undefined) updates.sortOrder = parsed.data.sortOrder;
   if (parsed.data.isActive !== undefined) updates.isActive = parsed.data.isActive;
+
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ error: "Tidak ada data Estate yang diperbarui." }, { status: 400 });
+  }
 
   try {
     const [updated] = await db

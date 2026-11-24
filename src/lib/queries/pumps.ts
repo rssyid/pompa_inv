@@ -26,6 +26,7 @@ export interface EnrichedPumpRow {
   estateId: number | null;
   estateCode: string | null;
   estateName: string | null;
+  estateSortOrder: number | null;
   regionId: number | null;
   regionCode: string | null;
   regionName: string | null;
@@ -98,6 +99,7 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
         e.id AS "estateId",
         e.code AS "estateCode",
         e.name AS "estateName",
+        e.sort_order AS "estateSortOrder",
         r.id AS "regionId",
         r.code AS "regionCode",
         r.name AS "regionName",
@@ -156,11 +158,23 @@ export async function queryFilteredPumps(filters: PumpFilterParams): Promise<Enr
     LEFT JOIN latest_inspections li ON li.pump_id = fp.id
     LEFT JOIN issue_counts ic ON ic.inspection_id = li.id
     LEFT JOIN photo_counts pc ON pc.inspection_id = li.id
-    ORDER BY COALESCE(fp."estateCode", 'ZZZ') ASC, fp."pumpCode" ASC
+    ORDER BY
+      CASE
+        WHEN fp."estateId" IS NULL THEN 2
+        WHEN COALESCE(fp."estateSortOrder", 0) > 0 THEN 0
+        ELSE 1
+      END ASC,
+      COALESCE(fp."estateSortOrder", 2147483647) ASC,
+      COALESCE(fp."estateCode", 'ZZZ') ASC,
+      fp."pumpCode" ASC
   `);
 
   return (result.rows as unknown as EnrichedPumpRow[]).map((row) => ({
     ...row,
+    estateSortOrder:
+      row.estateSortOrder === null || row.estateSortOrder === undefined
+        ? null
+        : Number(row.estateSortOrder),
     issueCount: Number(row.issueCount ?? 0),
     photoCount: Number(row.photoCount ?? 0),
     isPreOrder: Boolean(row.isPreOrder),
@@ -196,6 +210,7 @@ export async function queryLatestIssuesForPumps(
   }
 
   const inspectionIds = Array.from(pumpByInspection.keys());
+  const pumpRank = new Map(enrichedPumps.map((p, idx) => [p.id, idx]));
   const badItems = await db
     .select({
       id: inspectionItems.id,
@@ -206,6 +221,7 @@ export async function queryLatestIssuesForPumps(
       availability: inspectionItems.availability,
       condition: inspectionItems.condition,
       notes: inspectionItems.notes,
+      sortOrder: inspectionItems.sortOrder,
       issueLabel: issuePresets.label,
     })
     .from(inspectionItems)
@@ -218,7 +234,17 @@ export async function queryLatestIssuesForPumps(
     )
     .orderBy(asc(inspectionItems.inspectionId), asc(inspectionItems.sortOrder));
 
-  return badItems.map((item) => {
+  const sortedBadItems = [...badItems].sort((a, b) => {
+    const pumpA = pumpByInspection.get(a.inspectionId);
+    const pumpB = pumpByInspection.get(b.inspectionId);
+    const rankDiff =
+      (pumpA ? (pumpRank.get(pumpA.id) ?? 999999) : 999999) -
+      (pumpB ? (pumpRank.get(pumpB.id) ?? 999999) : 999999);
+    if (rankDiff !== 0) return rankDiff;
+    return a.sortOrder - b.sortOrder;
+  });
+
+  return sortedBadItems.map((item) => {
     const p = pumpByInspection.get(item.inspectionId)!;
     return {
       id: item.id,

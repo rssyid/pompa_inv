@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/auth";
+import { compareEstateOrder } from "@/lib/estate-order";
 import { queryFilteredPumps, queryLatestIssuesForPumps } from "@/lib/queries/pumps";
 
 export async function GET(request: NextRequest) {
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
       estateId: number;
       estateCode: string;
       regionName: string;
+      sortOrder: number;
       total: number;
       aktif: number;
       perluPerbaikan: number;
@@ -59,6 +61,7 @@ export async function GET(request: NextRequest) {
       estateId: p.estateId ?? 0,
       estateCode: p.estateCode ?? "Belum Assign",
       regionName: p.regionName ?? "-",
+      sortOrder: p.estateSortOrder ?? 0,
       total: 0,
       aktif: 0,
       perluPerbaikan: 0,
@@ -73,9 +76,16 @@ export async function GET(request: NextRequest) {
     estateMap.set(key, entry);
   }
 
+  const byEstate = Array.from(estateMap.values()).sort((a, b) =>
+    compareEstateOrder(
+      { sortOrder: a.sortOrder, code: a.estateId ? a.estateCode : null },
+      { sortOrder: b.sortOrder, code: b.estateId ? b.estateCode : null }
+    )
+  );
+
   return NextResponse.json({
     totals,
-    byEstate: Array.from(estateMap.values()),
+    byEstate,
     pumps,
     issues,
   });
