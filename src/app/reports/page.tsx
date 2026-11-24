@@ -93,6 +93,20 @@ function buildFilterMeta(
   return { companyTitle, filterItems: items };
 }
 
+function StackedLines({ lines }: { lines: (string | null | undefined)[] }) {
+  const parts = lines.map((l) => (l ?? "").trim()).filter(Boolean);
+  if (parts.length === 0) return <>-</>;
+  return (
+    <>
+      {parts.map((part, i) => (
+        <span key={i} className="block whitespace-nowrap">
+          {part}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export default function ReportsPage() {
   const { user, master, ensureLoaded, error: bootError } = useAppData();
   const [report, setReport] = useState<ReportSummaryPayload | null>(null);
@@ -794,10 +808,10 @@ export default function ReportsPage() {
                                   {p.pumpCode}
                                 </td>
                                 <td className="px-3 py-2.5 text-xs text-field-muted">
-                                  {p.regionName}
+                                  <StackedLines lines={(p.regionName ?? "").split("/")} />
                                 </td>
                                 <td className="px-3 py-2.5 font-mono text-xs">
-                                  {p.estateCode} / {p.blockCode}
+                                  <StackedLines lines={[p.estateCode, p.blockCode]} />
                                 </td>
                                 <td className="px-3 py-2.5">{p.pumpTypeName}</td>
                                 <td className="px-3 py-2.5 text-field-muted">
@@ -810,9 +824,18 @@ export default function ReportsPage() {
                                   {p.issueCount}
                                 </td>
                                 <td className="px-3 py-2.5 text-xs text-field-muted">
-                                  {p.latestInspectedDate
-                                    ? `${p.latestInspectedDate} (${p.latestInspectorName})`
-                                    : "-"}
+                                  {p.latestInspectedDate ? (
+                                    <>
+                                      <span className="block whitespace-nowrap font-mono tabular-nums text-field-ink">
+                                        {p.latestInspectedDate}
+                                      </span>
+                                      <span className="block whitespace-nowrap">
+                                        {p.latestInspectorName}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    "-"
+                                  )}
                                 </td>
                               </tr>
                             ))}
@@ -890,7 +913,7 @@ export default function ReportsPage() {
                             {report.issues.map((item) => (
                               <tr key={item.id} className="hover:bg-field-bg/60">
                                 <td className="px-3 py-2.5 font-mono text-xs">
-                                  {item.estateCode} / {item.blockCode}
+                                  <StackedLines lines={[item.estateCode, item.blockCode]} />
                                 </td>
                                 <td className="px-3 py-2.5 font-mono font-semibold text-field-ink">
                                   {item.pumpCode}
