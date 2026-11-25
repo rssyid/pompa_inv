@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ClipboardCheck } from "lucide-react";
+import { ClipboardCheck } from "lucide-react";
 import { useAppData } from "@/components/AppDataProvider";
 import { AppShell } from "@/components/AppShell";
 import {
@@ -10,8 +10,16 @@ import {
   HierarchyFilterBar,
 } from "@/components/HierarchyFilterBar";
 import { UnitStatusBadge } from "@/components/StatusBadge";
+import { EstateConditionTable } from "@/components/summary/EstateConditionTable";
+import { PumpTypeBreakdownTable } from "@/components/summary/PumpTypeBreakdownTable";
 import { EmptyState, ErrorState, LoadingState } from "@/components/UiStates";
 import { EnrichedPump, fetchJson } from "@/lib/client-fetch";
+import {
+  ConditionCountsWithTypes,
+  EstateBreakdownRow,
+  PumpTypeColumn,
+  RegionBreakdownGroup,
+} from "@/lib/summary-breakdown";
 
 interface ReportSummaryResponse {
   totals: {
@@ -21,17 +29,10 @@ interface ReportSummaryResponse {
     rusakTotal: number;
     totalIssues: number;
   };
-  byEstate: Array<{
-    estateId: number;
-    estateCode: string;
-    regionName: string;
-    sortOrder?: number;
-    total: number;
-    aktif: number;
-    perluPerbaikan: number;
-    rusakTotal: number;
-    issueCount: number;
-  }>;
+  byEstate: EstateBreakdownRow[];
+  byRegion: RegionBreakdownGroup[];
+  pumpTypeColumns: PumpTypeColumn[];
+  grandTotal: ConditionCountsWithTypes;
   pumps: EnrichedPump[];
 }
 
@@ -124,17 +125,6 @@ export default function DashboardPage() {
   const urgentPumps =
     summary?.pumps.filter((p) => p.currentUnitStatus !== "aktif") ?? [];
 
-  const estateTotals = (summary?.byEstate ?? []).reduce(
-    (acc, row) => ({
-      total: acc.total + row.total,
-      aktif: acc.aktif + row.aktif,
-      perluPerbaikan: acc.perluPerbaikan + row.perluPerbaikan,
-      rusakTotal: acc.rusakTotal + row.rusakTotal,
-      issueCount: acc.issueCount + row.issueCount,
-    }),
-    { total: 0, aktif: 0, perluPerbaikan: 0, rusakTotal: 0, issueCount: 0 }
-  );
-
   return (
     <AppShell
       user={user}
@@ -189,89 +179,18 @@ export default function DashboardPage() {
               </div>
             </section>
 
-            {/* Rekap per Estate */}
-            <section aria-label="Rekap kondisi per Estate" className="rounded-lg border border-field-border bg-field-surface">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-field-border px-4 py-3">
-                <h2 className="text-base font-bold text-field-ink">Kondisi per Estate</h2>
-                <Link
-                  href="/reports"
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-field-border bg-field-bg px-3 text-sm font-semibold text-field-ink hover:bg-[#EAEFEA]"
-                >
-                  <span>Buka Laporan Lengkap</span>
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </Link>
-              </div>
+            {/* Rekap per Estate & Region */}
+            <EstateConditionTable
+              byRegion={summary.byRegion}
+              grandTotal={summary.grandTotal}
+            />
 
-              {summary.byEstate.length === 0 ? (
-                <div className="p-4">
-                  <EmptyState
-                    title="Belum ada pompa pada filter ini"
-                    description="Ubah pilihan PT, Region, Estate, atau tambahkan unit pompa melalui menu Admin."
-                  />
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
-                    <thead className="border-b border-field-border bg-field-bg text-xs font-semibold text-field-muted">
-                      <tr>
-                        <th className="px-4 py-3">Estate</th>
-                        <th className="px-4 py-3">Region</th>
-                        <th className="px-4 py-3 text-right">Total</th>
-                        <th className="px-4 py-3 text-right">Aktif</th>
-                        <th className="px-4 py-3 text-right">Perbaikan</th>
-                        <th className="px-4 py-3 text-right">Rusak</th>
-                        <th className="px-4 py-3 text-right">Part Bermasalah</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-field-border">
-                      {summary.byEstate.map((row) => (
-                        <tr key={row.estateId} className="hover:bg-field-bg/60">
-                          <td className="px-4 py-3 font-mono font-semibold text-field-ink">
-                            {row.estateCode}
-                          </td>
-                          <td className="px-4 py-3 text-field-muted">{row.regionName}</td>
-                          <td className="px-4 py-3 text-right font-mono tabular-nums">{row.total}</td>
-                          <td className="px-4 py-3 text-right font-mono font-semibold tabular-nums text-[#166534]">
-                            {row.aktif}
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono font-semibold tabular-nums text-[#92400E]">
-                            {row.perluPerbaikan}
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono font-semibold tabular-nums text-[#991B1B]">
-                            {row.rusakTotal}
-                          </td>
-                          <td className="px-4 py-3 text-right font-mono tabular-nums">
-                            {row.issueCount}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t-2 border-field-border bg-[#EEF2EF] font-bold text-field-ink">
-                        <th scope="row" colSpan={2} className="px-4 py-3 text-left">
-                          Total Keseluruhan
-                        </th>
-                        <td className="px-4 py-3 text-right font-mono tabular-nums">
-                          {estateTotals.total}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono tabular-nums text-[#166534]">
-                          {estateTotals.aktif}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono tabular-nums text-[#92400E]">
-                          {estateTotals.perluPerbaikan}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono tabular-nums text-[#991B1B]">
-                          {estateTotals.rusakTotal}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono tabular-nums">
-                          {estateTotals.issueCount}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-            </section>
+            {/* Breakdown Tipe Pompa per Estate, Region, dan All */}
+            <PumpTypeBreakdownTable
+              byRegion={summary.byRegion}
+              pumpTypeColumns={summary.pumpTypeColumns}
+              grandTotal={summary.grandTotal}
+            />
 
             {/* Unit Membutuhkan Tindak Lanjut */}
             <section aria-label="Unit pompa perlu perhatian" className="space-y-3">

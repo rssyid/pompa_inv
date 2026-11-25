@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { and, asc, eq } from "drizzle-orm";
+import { getDb } from "@/db";
+import { pumpTypes } from "@/db/schema";
 import { requireApiSession } from "@/lib/auth";
-import { compareEstateOrder } from "@/lib/estate-order";
 import { queryFilteredPumps, queryLatestIssuesForPumps } from "@/lib/queries/pumps";
+import { buildSummaryBreakdowns } from "@/lib/summary-breakdown";
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession();
@@ -10,16 +13,33 @@ export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams;
   const dateFrom = sp.get("dateFrom") || undefined;
   const dateTo = sp.get("dateTo") || undefined;
+  const pumpTypeIdFilter = Number(sp.get("pumpTypeId")) || undefined;
 
-  const allMatchingPumps = await queryFilteredPumps({
-    companyId: Number(sp.get("companyId")) || undefined,
-    regionId: Number(sp.get("regionId")) || undefined,
-    estateId: Number(sp.get("estateId")) || undefined,
-    blockId: Number(sp.get("blockId")) || undefined,
-    pumpTypeId: Number(sp.get("pumpTypeId")) || undefined,
-    status: sp.get("status") ?? undefined,
-    search: sp.get("search") ?? undefined,
-  });
+  const db = getDb();
+  const [allMatchingPumps, activePumpTypeRows] = await Promise.all([
+    queryFilteredPumps({
+      companyId: Number(sp.get("companyId")) || undefined,
+      regionId: Number(sp.get("regionId")) || undefined,
+      estateId: Number(sp.get("estateId")) || undefined,
+      blockId: Number(sp.get("blockId")) || undefined,
+      pumpTypeId: pumpTypeIdFilter,
+      status: sp.get("status") ?? undefined,
+      search: sp.get("search") ?? undefined,
+    }),
+    db
+      .select({
+        id: pumpTypes.id,
+        code: pumpTypes.code,
+        name: pumpTypes.name,
+      })
+      .from(pumpTypes)
+      .where(
+        pumpTypeIdFilter
+          ? and(eq(pumpTypes.isActive, true), eq(pumpTypes.id, pumpTypeIdFilter))
+          : eq(pumpTypes.isActive, true)
+      )
+      .orderBy(asc(pumpTypes.name)),
+  ]);
 
   const pumps = allMatchingPumps.filter((p) => {
     if (!dateFrom && !dateTo) return true;
@@ -40,52 +60,14 @@ export async function GET(request: NextRequest) {
     totalIssues: issues.length,
   };
 
-  const estateMap = new Map<
-    string,
-    {
-      estateId: number;
-      estateCode: string;
-      regionName: string;
-      sortOrder: number;
-      total: number;
-      aktif: number;
-      perluPerbaikan: number;
-      rusakTotal: number;
-      issueCount: number;
-    }
-  >();
-
-  for (const p of pumps) {
-    const key = `${p.estateId ?? 0}`;
-    const entry = estateMap.get(key) ?? {
-      estateId: p.estateId ?? 0,
-      estateCode: p.estateCode ?? "Belum Assign",
-      regionName: p.regionName ?? "-",
-      sortOrder: p.estateSortOrder ?? 0,
-      total: 0,
-      aktif: 0,
-      perluPerbaikan: 0,
-      rusakTotal: 0,
-      issueCount: 0,
-    };
-    entry.total += 1;
-    if (p.currentUnitStatus === "aktif") entry.aktif += 1;
-    else if (p.currentUnitStatus === "perlu_perbaikan") entry.perluPerbaikan += 1;
-    else entry.rusakTotal += 1;
-    entry.issueCount += p.issueCount;
-    estateMap.set(key, entry);
-  }
-
-  const byEstate = Array.from(estateMap.values()).sort((a, b) =>
-    compareEstateOrder(
-      { sortOrder: a.sortOrder, code: a.estateId ? a.estateCode : null },
-      { sortOrder: b.sortOrder, code: b.estateId ? b.estateCode : null }
-    )
-  );
+  const breakdowns = buildSummaryBreakdowns(pumps, activePumpTypeRows);
 
   return NextResponse.json({
     totals,
-    byEstate,
+    byEstate: breakdowns.byEstate,
+    byRegion: breakdowns.byRegion,
+    pumpTypeColumns: breakdowns.pumpTypeColumns,
+    grandTotal: breakdowns.grandTotal,
     pumps,
     issues,
   });
